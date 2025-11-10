@@ -1,0 +1,135 @@
+// ==UserScript==
+// @name         Torn Profile: Iron Dome Checker (Auto-updating w/ Banner)
+// @namespace    Script By John_Of_Mud 712511
+// @version      2.1.0
+// @description  Displays a banner and "MEMBER OF THE IRON DOME" tag on Torn profiles when the user's faction is listed in a live GitHub Gist JSON.
+// @match        https://www.torn.com/profiles.php*
+// @grant        GM_xmlhttpRequest
+// @grant        GM.getValue
+// @grant        GM.setValue
+// @connect      gist.githubusercontent.com
+// @connect      github.com
+// ==/UserScript==
+
+(function () {
+  'use strict';
+
+  const CONFIG = {
+    // ✅ Live JSON of Iron Dome factions
+    sourceUrl: 'https://gist.githubusercontent.com/WetNightmare/297cba005b3319118f31ebf146e90b0b/raw/199d410bcd3b00cbb252a8366d650123fd2229f5/iron-dome-factions.json',
+
+    // ✅ Hosted banner image
+    bannerUrl: 'https://github.com/WetNightmare/FactionAlliance/blob/f373bfec9fd256ca995895a19c64141c05c685a0/iron-dome-banner-750x140.png?raw=true',
+
+    cacheTtlMs: 12 * 60 * 60 * 1000, // 12 hours
+    badgeText: 'MEMBER OF THE IRON DOME',
+    badgeId: 'iron-dome-tag',
+    bannerId: 'iron-dome-banner'
+  };
+
+  const STORAGE_KEYS = {
+    factions: 'ironDome.factions.cache',
+  };
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const norm = (str) => (str || '').trim().toLowerCase();
+
+  /** -------------------------------
+   *  Fetch faction list (with cache)
+   *  ------------------------------- */
+  function gmRequest(url) {
+    return new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        method: 'GET',
+        url,
+        onload: (res) => {
+          if (res.status >= 200 && res.status < 300) resolve(res.responseText);
+          else reject(new Error(`HTTP ${res.status}`));
+        },
+        onerror: reject,
+        ontimeout: () => reject(new Error('Request timed out')),
+      });
+    });
+  }
+
+  async function loadFactionList() {
+    const cached = await GM.getValue(STORAGE_KEYS.factions, null);
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached);
+        if (Date.now() - parsed.ts < CONFIG.cacheTtlMs)
+          return new Set(parsed.list.map(norm));
+      } catch {/* ignore */}
+    }
+
+    try {
+      const text = await gmRequest(CONFIG.sourceUrl);
+      const list = JSON.parse(text);
+      await GM.setValue(STORAGE_KEYS.factions, JSON.stringify({ ts: Date.now(), list }));
+      return new Set(list.map(norm));
+    } catch (e) {
+      console.warn('[IronDome] Could not fetch JSON:', e);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        return new Set(parsed.list.map(norm));
+      }
+      return new Set();
+    }
+  }
+
+  /** -------------------------------
+   *  DOM helpers
+   *  ------------------------------- */
+  function findFactionName() {
+    const link = document.querySelector('a[href*="/factions.php"]');
+    return link ? link.textContent.trim() : null;
+  }
+
+  function findInsertionPoint() {
+    return document.querySelector('.buttons-list') || document.body;
+  }
+
+  function removeExistingElements() {
+    const banner = document.getElementById(CONFIG.bannerId);
+    const tag = document.getElementById(CONFIG.badgeId);
+    if (banner) banner.remove();
+    if (tag) tag.remove();
+  }
+
+  function insertBannerAndTag() {
+    const host = findInsertionPoint();
+    if (!host) return;
+
+    // Banner
+    const banner = document.createElement('img');
+    banner.id = CONFIG.bannerId;
+    banner.src = CONFIG.bannerUrl;
+    banner.alt = 'Iron Dome Alliance';
+    banner.style.width = '750px';
+    banner.style.height = '140px';
+    banner.style.border = '1px solid rgba(255,255,255,0.15)';
+    banner.style.display = 'block';
+    banner.style.margin = '10px auto 5px auto';
+    banner.style.borderRadius = '8px';
+
+    // Text Tag
+    const tag = document.createElement('div');
+    tag.id = CONFIG.badgeId;
+    tag.textContent = CONFIG.badgeText;
+    tag.style.color = '#ff4444';
+    tag.style.fontWeight = 'bold';
+    tag.style.textAlign = 'center';
+    tag.style.marginTop = '6px';
+
+    host.insertAdjacentElement('afterend', tag);
+    tag.insertAdjacentElement('beforebegin', banner);
+  }
+
+  /** -------------------------------
+   *  Main logic
+   *  ------------------------------- */
+  let factionsSet = new Set();
+
+  async function evaluateProfile() {
+    for (let i = 0; i < 10; i++) {
+      if (document.querySelector('a[href*="/factions.php"]')) break;
