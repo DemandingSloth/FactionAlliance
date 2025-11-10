@@ -1,73 +1,90 @@
 // ==UserScript==
-// @name         Torn PDA: Iron Dome Checker (Remote)
+// @name         Torn PDA: Iron Dome Checker (Diagnostic)
 // @namespace    WetNightmare
-// @version      1.0.0
-// @description  Show a banner + tag on Torn profiles if the faction is in your live JSON list (works in Torn PDA, no GM_*).
+// @version      1.1.0
+// @description  Diagnostic build: shows a debug panel with faction, JSON status, and insertion steps to find why UI isn't appearing.
 // @match        https://www.torn.com/profiles.php*
 // @run-at       document-idle
 // @noframes
 // ==/UserScript==
 
-// Iron Dome Checker for Torn PDA (remote-load friendly, no GM_*)
-// Loads live JSON from Gist, caches via localStorage, injects banner + tag
 (() => {
   'use strict';
 
   const CONFIG = {
     sourceUrl: 'https://gist.githubusercontent.com/WetNightmare/297cba005b3319118f31ebf146e90b0b/raw/199d410bcd3b00cbb252a8366d650123fd2229f5/iron-dome-factions.json',
     bannerUrl: 'https://github.com/WetNightmare/FactionAlliance/blob/f373bfec9fd256ca995895a19c64141c05c685a0/iron-dome-banner-750x140.png?raw=true',
-    cacheTtlMs: 12 * 60 * 60 * 1000, // 12 hours
+    cacheTtlMs: 12 * 60 * 60 * 1000,
     badgeText: 'MEMBER OF THE IRON DOME',
     bannerId: 'iron-dome-banner',
     badgeId: 'iron-dome-tag',
-    debug: false
+    debugPanelId: 'iron-dome-debug-panel',
+    debug: true,
+    // Set to true to show banner+tag even if JSON isn't loaded or faction isn't matched (for DOM insertion testing)
+    forceShow: false
   };
 
-  const STORAGE_KEYS = {
-    factions: 'ironDome.factions.cache.v1'
-  };
-
-  const log = (...a) => CONFIG.debug && console.log('[IronDome]', ...a);
+  const STORAGE_KEYS = { factions: 'ironDome.factions.cache.v1' };
   const norm = (s) => (s || '').trim().toLowerCase();
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+  function ensureDebugPanel() {
+    let p = document.getElementById(CONFIG.debugPanelId);
+    if (!p) {
+      p = document.createElement('div');
+      p.id = CONFIG.debugPanelId;
+      p.style.cssText = [
+        'position:fixed','right:8px','bottom:8px','z-index:99999',
+        'max-width:280px','font:12px/1.35 system-ui,Arial,sans-serif',
+        'background:#111b','color:#d7e0ea','border:1px solid #2b3440',
+        'padding:8px','border-radius:8px','backdrop-filter:blur(2px)',
+        'box-shadow:0 2px 8px rgba(0,0,0,.35)'
+      ].join(';');
+      document.body.appendChild(p);
+    }
+    return p;
+  }
+  function report(lines) {
+    if (!CONFIG.debug) return;
+    const p = ensureDebugPanel();
+    p.innerHTML = lines.map(line => `<div>${line}</div>`).join('');
+  }
+
+  // Load factions with cache
   async function loadFactionSet() {
+    // cache
     try {
       const raw = localStorage.getItem(STORAGE_KEYS.factions);
       if (raw) {
         const parsed = JSON.parse(raw);
         if (parsed && Array.isArray(parsed.list) && Date.now() - parsed.ts < CONFIG.cacheTtlMs) {
-          log('Using cached faction list');
-          return new Set(parsed.list.map(norm));
+          return { set: new Set(parsed.list.map(norm)), source: 'cache', count: parsed.list.length };
         }
       }
     } catch (e) {
-      log('Cache read error', e);
+      // ignore cache errors
     }
 
+    // fetch fresh
     try {
       const res = await fetch(CONFIG.sourceUrl, { cache: 'no-store' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const list = await res.json();
       if (!Array.isArray(list)) throw new Error('JSON not array');
-
-      try {
-        localStorage.setItem(STORAGE_KEYS.factions, JSON.stringify({ ts: Date.now(), list }));
-      } catch (e) {
-        log('Cache write error', e);
-      }
-      log('Fetched fresh faction list');
-      return new Set(list.map(norm));
+      localStorage.setItem(STORAGE_KEYS.factions, JSON.stringify({ ts: Date.now(), list }));
+      return { set: new Set(list.map(norm)), source: 'network', count: list.length };
     } catch (e) {
-      log('Fetch failed; trying stale cache', e);
-      try {
-        const raw = localStorage.getItem(STORAGE_KEYS.factions);
-        if (raw) {
+      // fallback to stale cache
+      const raw = localStorage.getItem(STORAGE_KEYS.factions);
+      if (raw) {
+        try {
           const parsed = JSON.parse(raw);
-          if (parsed && Array.isArray(parsed.list)) return new Set(parsed.list.map(norm));
-        }
-      } catch {}
-      return new Set();
+          if (parsed && Array.isArray(parsed.list)) {
+            return { set: new Set(parsed.list.map(norm)), source: 'stale-cache', count: parsed.list.length, error: e.message };
+          }
+        } catch {}
+      }
+      return { set: new Set(), source: 'none', count: 0, error: e.message };
     }
   }
 
@@ -76,7 +93,7 @@
     if (link?.textContent) return link.textContent.trim();
 
     const span = Array.from(document.querySelectorAll('span[title*=" of "]'))
-      .find((el) => el.querySelector('a[href*="/factions.php"]'));
+      .find(el => el.querySelector('a[href*="/factions.php"]'));
     if (span) {
       const a = span.querySelector('a[href*="/factions.php"]');
       if (a?.textContent) return a.textContent.trim();
@@ -84,12 +101,21 @@
     return null;
   }
 
-  function findButtonsArea() {
-    return (
-      document.querySelector('.buttons-list') ||
-      document.querySelector('[class*="buttons"]') ||
-      document.body
-    );
+  // Try multiple insertion spots (PDA layouts can differ)
+  function findInsertionPoint() {
+    const candidates = [
+      '.buttons-list',
+      '[class*="buttons"]',
+      '#profileroot',
+      '.profile-container',
+      '#mainContainer',
+      'main'
+    ];
+    for (const sel of candidates) {
+      const el = document.querySelector(sel);
+      if (el) return { el, sel };
+    }
+    return { el: document.body, sel: 'document.body' };
   }
 
   function removeExisting() {
@@ -98,9 +124,9 @@
   }
 
   function insertUI() {
-    const host = findButtonsArea();
-    if (!host) return;
+    const { el: host, sel } = findInsertionPoint();
 
+    // Banner
     const img = document.createElement('img');
     img.id = CONFIG.bannerId;
     img.src = CONFIG.bannerUrl;
@@ -115,6 +141,7 @@
     img.decoding = 'async';
     img.loading = 'lazy';
 
+    // Tag
     const tag = document.createElement('div');
     tag.id = CONFIG.badgeId;
     tag.textContent = CONFIG.badgeText;
@@ -126,6 +153,7 @@
       'letter-spacing: .3px',
     ].join(';');
 
+    // Place after buttons if possible, else append
     if (host.classList?.contains('buttons-list')) {
       host.insertAdjacentElement('afterend', img);
       img.insertAdjacentElement('afterend', tag);
@@ -133,48 +161,65 @@
       host.appendChild(img);
       host.appendChild(tag);
     }
+
+    return sel;
   }
 
   let factionsSet = new Set();
-  let ticking = false;
+  let lastError = '';
+  let lastInsertSel = '';
 
   async function evaluate() {
-    if (ticking) return;
-    ticking = true;
     try {
-      for (let i = 0; i < 12; i++) {
-        const hasButtons = findButtonsArea();
-        const hasFaction = document.querySelector('a[href*="/factions.php"]') ||
-                           document.querySelector('span[title*=" of "]');
-        if (hasButtons && hasFaction) break;
+      // Wait for profile UI
+      for (let i = 0; i < 20; i++) {
+        const hasButtons = document.querySelector('.buttons-list') || document.querySelector('[class*="buttons"]');
+        const hasFactionBits = document.querySelector('a[href*="/factions.php"]') ||
+                               document.querySelector('span[title*=" of "]');
+        if (hasButtons || hasFactionBits) break;
         await sleep(150);
       }
 
       const faction = getFactionName();
-      log('Detected faction:', faction);
-      if (!faction) {
-        removeExisting();
-        return;
+      const inAlliance = CONFIG.forceShow || (faction && factionsSet.has(norm(faction)));
+      removeExisting();
+      if (inAlliance) {
+        lastInsertSel = insertUI();
       }
 
-      if (factionsSet.has(norm(faction))) {
-        removeExisting();
-        insertUI();
-      } else {
-        removeExisting();
-      }
-    } finally {
-      ticking = false;
+      report([
+        `<b>IronDome Diagnostic</b>`,
+        `Faction: <b>${faction || '(not found)'}</b>`,
+        `List source: ${factionsMeta.source} (${factionsMeta.count})`,
+        `In alliance: <b>${inAlliance}</b>`,
+        `Insert point: ${lastInsertSel || '(none yet)'}`,
+        lastError ? `Error: <span style="color:#ff7373">${lastError}</span>` : 'Error: (none)',
+        CONFIG.forceShow ? '<span style="color:#ffd166">forceShow = true</span>' : ''
+      ]);
+    } catch (e) {
+      lastError = e.message || String(e);
+      report([`Error: ${lastError}`]);
     }
   }
 
+  let factionsMeta = { set: new Set(), source: 'none', count: 0 };
+
   async function init() {
-    factionsSet = await loadFactionSet();
+    try {
+      const meta = await loadFactionSet();
+      factionsSet = meta.set;
+      factionsMeta = meta;
+    } catch (e) {
+      lastError = e.message || String(e);
+    }
+
     await evaluate();
 
+    // Watch for SPA changes
     const obs = new MutationObserver(() => evaluate());
     obs.observe(document.documentElement, { childList: true, subtree: true });
 
+    // Watch URL changes too
     let lastHref = location.href;
     setInterval(() => {
       if (location.href !== lastHref) {
@@ -186,6 +231,6 @@
 
   init();
 
-  // Helper: In PDA console, you can run:
-  // localStorage.removeItem('ironDome.factions.cache.v1')  // then reload
+  // Helper for manual reset in PDA console:
+  // localStorage.removeItem('ironDome.factions.cache.v1');
 })();
