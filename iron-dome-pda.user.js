@@ -1,3 +1,13 @@
+// ==UserScript==
+// @name         Torn PDA: Iron Dome Checker (Remote)
+// @namespace    WetNightmare
+// @version      1.0.0
+// @description  Show a banner + tag on Torn profiles if the faction is in your live JSON list (works in Torn PDA, no GM_*).
+// @match        https://www.torn.com/profiles.php*
+// @run-at       document-idle
+// @noframes
+// ==/UserScript==
+
 // Iron Dome Checker for Torn PDA (remote-load friendly, no GM_*)
 // Loads live JSON from Gist, caches via localStorage, injects banner + tag
 (() => {
