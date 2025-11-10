@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Torn PDA: Iron Dome Checker (PDA-Optimized Robust)
+// @name         Torn PDA: Iron Dome Checker (Robust PDA Build)
 // @namespace    WetNightmare
-// @version      1.2.0
-// @description  PDA-safe fetch+cache, robust faction detection, broad insert points, on-screen diagnostics togglable.
+// @version      1.3.0
+// @description  PDA-safe: fetch+cache live JSON, robustly extract faction name from "Faction | role of/in faction" row, and insert banner+tag near that row.
 // @match        https://www.torn.com/profiles.php*
 // @run-at       document-idle
 // @noframes
@@ -12,21 +12,26 @@
   'use strict';
 
   const CONFIG = {
-    sourceUrl: 'https://raw.githubusercontent.com/WetNightmare/FactionAlliance/refs/heads/main/iron-dome-factions.json',
-    sourceUrl: 'https://gist.githubusercontent.com/WetNightmare/297cba005b3319118f31ebf146e90b0b/raw/199d410bcd3b00cbb252a8366d650123fd2229f5/iron-dome-factions.json',
+    // ✅ Live JSON hosted in your repo (friendliest CORS for WebView)
+    sourceUrl: 'https://raw.githubusercontent.com/WetNightmare/FactionAlliance/main/iron-dome-factions.json',
 
+    // ✅ Hosted banner image (your GitHub file with ?raw=true)
     bannerUrl: 'https://github.com/WetNightmare/FactionAlliance/blob/f373bfec9fd256ca995895a19c64141c05c685a0/iron-dome-banner-750x140.png?raw=true',
-    cacheTtlMs: 12 * 60 * 60 * 1000,
+
+    cacheTtlMs: 12 * 60 * 60 * 1000, // 12 hours
     badgeText: 'MEMBER OF THE IRON DOME',
     bannerId: 'iron-dome-banner',
     badgeId: 'iron-dome-tag',
+
+    // Debug/diagnostics
+    debug: false,                // <-- set true to show on-screen debug panel
     debugPanelId: 'iron-dome-debug-panel',
-    debug: true,      // set to false to hide the debug panel
-    forceShow: false, // set true to verify insertion even without JSON/faction match
+    forceShow: false,            // <-- set true to show banner/tag even if not matched (for insertion testing)
   };
 
   const STORAGE_KEYS = { factions: 'ironDome.factions.cache.v2' };
-  const norm = (s) => (s || '').trim().toLowerCase();
+
+  const norm  = (s) => (s || '').trim().toLowerCase();
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   /* ------------------- Debug panel ------------------- */
@@ -55,7 +60,7 @@
 
   /* ------------------- Fetch + cache ------------------- */
   async function loadFactionSet() {
-    // cache
+    // Try cache first
     try {
       const raw = localStorage.getItem(STORAGE_KEYS.factions);
       if (raw) {
@@ -64,18 +69,19 @@
           return { set: new Set(parsed.list.map(norm)), source: 'cache', count: parsed.list.length };
         }
       }
-    } catch {}
+    } catch {/* ignore cache read errors */}
 
-    // fetch fresh
+    // Fetch fresh
     try {
       const res = await fetch(CONFIG.sourceUrl, { cache: 'no-store', mode: 'cors' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const list = await res.json();
       if (!Array.isArray(list)) throw new Error('JSON not array');
+
       localStorage.setItem(STORAGE_KEYS.factions, JSON.stringify({ ts: Date.now(), list }));
       return { set: new Set(list.map(norm)), source: 'network', count: list.length };
     } catch (e) {
-      // stale cache fallback
+      // Fallback to stale cache
       try {
         const raw = localStorage.getItem(STORAGE_KEYS.factions);
         if (raw) {
@@ -89,72 +95,103 @@
     }
   }
 
-  /* ------------------- Faction detection (robust) ------------------- */
+  /* ------------------- Faction extraction (robust) ------------------- */
   function getFactionName() {
-    // 1) Any anchor to /factions.php with meaningful text
-    const candidates = Array.from(document.querySelectorAll('a[href*="/factions.php"]'));
-    let best = '';
-    for (const a of candidates) {
-      const t = (a.textContent || '').trim();
-      // Skip generic labels like 'Faction'
-      if (t && t.length > best.length && !/^faction$/i.test(t)) best = t;
-      // Check attributes that might hold the real name
-      const title = (a.getAttribute('title') || '').trim();
-      if (title && title.length > best.length && !/^faction$/i.test(title)) best = title;
-      const aria = (a.getAttribute('aria-label') || '').trim();
-      if (aria && aria.length > best.length && !/^faction$/i.test(aria)) best = aria;
-    }
-    if (best) return best;
+    // A) Preferred: scrape the “Faction | …” row explicitly
+    const rowSelectors = [
+      'tr',                  // generic tables
+      '.info-row',           // common info rows
+      'li',                  // list implementations
+      '.profile-section div' // generic container blocks
+    ];
 
-    // 2) Look near the anchor for text (parent row, list item, etc.)
-    for (const a of candidates) {
-      const block = a.closest('li, tr, div, section, article');
-      if (block) {
-        const text = (block.textContent || '').trim();
-        // Heuristic: pick the longest capitalized chunk
-        const chunks = text.split(/[\n\r]+/).map(s => s.trim()).filter(Boolean);
-        const guess = chunks.sort((x,y)=>y.length-x.length)[0] || '';
-        if (guess && guess.length > 2 && !/^faction$/i.test(guess)) return guess;
+    for (const rs of rowSelectors) {
+      const rows = document.querySelectorAll(rs);
+      for (const row of rows) {
+        // left/label cell
+        const labelEl =
+          row.querySelector('th, .label, .title, .left, .key') ||
+          (row.children[0] && row.children[0].matches('td,div,span') ? row.children[0] : null);
+
+        if (!labelEl) continue;
+        const label = (labelEl.textContent || '').trim().toLowerCase();
+        if (label !== 'faction') continue;
+
+        // right/value cell
+        const valueEl =
+          row.querySelector('td:last-child, .value, .right, .val') ||
+          (row.children[1] && row.children[1].matches('td,div,span') ? row.children[1] : null) ||
+          row;
+
+        // 1) If there’s a factions link, that text is authoritative
+        const link = valueEl.querySelector('a[href*="/factions.php"]');
+        if (link && link.textContent) {
+          const txt = link.textContent.trim();
+          if (txt && !/^faction$/i.test(txt)) return txt;
+        }
+
+        // 2) Parse phrases like: "Enforcer of Stage Fright" or "Enforcer in Stage Fright"
+        const raw = (valueEl.textContent || '').replace(/\s+/g, ' ').trim();
+        const m = raw.match(/\b(?:of|in)\s+(.+?)\s*$/i);
+        if (m && m[1]) return m[1].trim();
+
+        // 3) Fallback: pick the longest chunk of text
+        const chunks = raw.split(/[|–—\-•·]/).map(s => s.trim()).filter(Boolean);
+        const guess = chunks.sort((a,b)=>b.length-a.length)[0];
+        if (guess) return guess;
       }
     }
 
-    // 3) Fallback: scan known containers
-    const containers = [
-      '.profile-container',
-      '#profileroot',
-      'main',
-      '#content',
-      '#mainContainer'
-    ];
-    for (const sel of containers) {
-      const el = document.querySelector(sel);
-      if (!el) continue;
-      const txt = (el.textContent || '').trim();
-      // Try to find a line that looks like a proper name (at least one space and mixed case)
-      const lines = txt.split(/[\n\r]+/).map(s=>s.trim()).filter(Boolean);
-      const likely = lines.find(s => s.length > 3 && /[A-Za-z]/.test(s) && !/^faction$/i.test(s));
-      if (likely) return likely;
+    // B) Secondary: scan any factions link elsewhere, prefer longest non-generic text
+    const anchors = Array.from(document.querySelectorAll('a[href*="/factions.php"]'));
+    let best = '';
+    for (const a of anchors) {
+      const t = (a.textContent || a.getAttribute('title') || a.getAttribute('aria-label') || '').trim();
+      if (t && !/^faction$/i.test(t) && t.length > best.length) best = t;
     }
+    if (best) return best;
 
     return null;
   }
 
-  /* ------------------- Insertion points (broad) ------------------- */
+  /* ------------------- Insertion points (prefers faction row) ------------------- */
   function findInsertionPoint() {
-    const selectors = [
+    // 1) Directly after the Faction row (cleanest)
+    const factionRow = (() => {
+      // Table rows
+      const trs = document.querySelectorAll('tr');
+      for (const tr of trs) {
+        const first = tr.querySelector('th, td');
+        if (first && (first.textContent || '').trim().toLowerCase() === 'faction') return tr;
+      }
+      // General rows
+      const rows = document.querySelectorAll('.info-row, li, .profile-section div');
+      for (const r of rows) {
+        const label =
+          r.querySelector('.label, .title, .left, .key') ||
+          (r.children[0] && r.children[0].matches('div,span') ? r.children[0] : null);
+        if (label && (label.textContent || '').trim().toLowerCase() === 'faction') return r;
+      }
+      return null;
+    })();
+    if (factionRow) return { el: factionRow, sel: 'faction-row' };
+
+    // 2) Familiar UI anchors
+    const candidates = [
       '.buttons-list',
       '.profile-actions',
       '.profile-container',
       '#profileroot',
       '#content',
       '#mainContainer',
-      'main'
+      'main',
+      'body'
     ];
-    for (const sel of selectors) {
+    for (const sel of candidates) {
       const el = document.querySelector(sel);
       if (el) return { el, sel };
     }
-    return { el: document.body, sel: 'document.body' };
+    return { el: document.body, sel: 'body' };
   }
 
   function removeExisting() {
@@ -165,6 +202,7 @@
   function insertUI() {
     const { el: host, sel } = findInsertionPoint();
 
+    // Banner (Torn-friendly size)
     const img = document.createElement('img');
     img.id = CONFIG.bannerId;
     img.src = CONFIG.bannerUrl;
@@ -179,6 +217,7 @@
     img.decoding = 'async';
     img.loading = 'lazy';
 
+    // Text tag
     const tag = document.createElement('div');
     tag.id = CONFIG.badgeId;
     tag.textContent = CONFIG.badgeText;
@@ -190,7 +229,10 @@
       'letter-spacing: .3px',
     ].join(';');
 
-    if (host.classList?.contains('buttons-list') || host.classList?.contains('profile-actions')) {
+    if (sel === 'faction-row') {
+      host.insertAdjacentElement('afterend', img);
+      img.insertAdjacentElement('afterend', tag);
+    } else if (host.classList?.contains('buttons-list') || host.classList?.contains('profile-actions')) {
       host.insertAdjacentElement('afterend', img);
       img.insertAdjacentElement('afterend', tag);
     } else {
@@ -200,7 +242,7 @@
     return sel;
   }
 
-  /* ------------------- Main ------------------- */
+  /* ------------------- Main loop ------------------- */
   let factionsSet = new Set();
   let factionsMeta = { source: 'none', count: 0 };
   let busy = false;
@@ -210,7 +252,7 @@
     if (busy) return;
     busy = true;
     try {
-      // wait for profile UI bits to land
+      // Wait for profile UI bits to land
       for (let i = 0; i < 24; i++) {
         const hasButtons = document.querySelector('.buttons-list, .profile-actions');
         const hasFactionBit = document.querySelector('a[href*="/factions.php"]') ||
@@ -224,9 +266,7 @@
 
       removeExisting();
       lastInsertSel = '';
-      if (inAlliance) {
-        lastInsertSel = insertUI();
-      }
+      if (inAlliance) lastInsertSel = insertUI();
 
       if (CONFIG.debug) {
         report([
@@ -265,6 +305,6 @@
 
   init();
 
-  // Manual helpers in PDA console:
+  // PDA console helpers:
   // localStorage.removeItem('ironDome.factions.cache.v2'); // clear cache then reload
 })();
