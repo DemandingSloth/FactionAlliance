@@ -75,48 +75,53 @@
   report(['<b>IronDome</b> booting…']);
 
   // ---------- JSON fetch + cache ----------
-  async function loadFactionSet() {
-    // Try cache
+ async function loadFactionSet() {
+  // Try cache first
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.factions);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && Array.isArray(parsed.list) && Date.now() - parsed.ts < CONFIG.cacheTtlMs) {
+        report([`<b>IronDome</b> cache hit: ${parsed.list.length} factions`]);
+        return { set: new Set(parsed.list.map(norm)), source: 'cache', count: parsed.list.length };
+      }
+    }
+  } catch (e) {
+    report([`<b>Cache read error</b>: ${e.message || e}`]);
+  }
+
+  // Fetch fresh (with timeout)
+  try {
+    const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('fetch timeout')), 8000));
+    const res = await Promise.race([ fetch(CONFIG.sourceUrl, { cache: 'no-store', mode: 'cors' }), timeout ]);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const list = await res.json();
+    if (!Array.isArray(list)) throw new Error('JSON not array');
+
+    localStorage.setItem(STORAGE_KEYS.factions, JSON.stringify({ ts: Date.now(), list }));
+    report([`<b>IronDome</b> network: ${list.length} factions`]);
+    return { set: new Set(list.map(norm)), source: 'network', count: list.length };
+  } catch (e) {
+    // Fallback to stale cache
+    const err = e && (e.message || String(e));
     try {
       const raw = localStorage.getItem(STORAGE_KEYS.factions);
       if (raw) {
         const parsed = JSON.parse(raw);
-        if (parsed && Array.isArray(parsed.list) && Date.now() - parsed.ts < CONFIG.cacheTtlMs) {
-          log(`Using cached list (${parsed.list.length})`);
-          return { set: new Set(parsed.list.map(norm)), source: 'cache', count: parsed.list.length };
+        if (parsed && Array.isArray(parsed.list)) {
+          report([
+            `<b>Network error</b>: ${err}`,
+            `Using <b>stale cache</b>: ${parsed.list.length} factions`
+          ]);
+          return { set: new Set(parsed.list.map(norm)), source: 'stale-cache', count: parsed.list.length, error: err };
         }
       }
-    } catch (e) {
-      log('Cache read error:', e);
-    }
-
-    // Fetch fresh (simple timeout wrapper)
-    try {
-      const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('fetch timeout')), 8000));
-      const res = await Promise.race([ fetch(CONFIG.sourceUrl, { cache: 'no-store', mode: 'cors' }), timeout ]);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const list = await res.json();
-      if (!Array.isArray(list)) throw new Error('JSON not array');
-
-      localStorage.setItem(STORAGE_KEYS.factions, JSON.stringify({ ts: Date.now(), list }));
-      log(`Fetched list from network (${list.length})`);
-      return { set: new Set(list.map(norm)), source: 'network', count: list.length };
-    } catch (e) {
-      log('Fetch failed, trying stale cache:', e.message || e);
-      try {
-        const raw = localStorage.getItem(STORAGE_KEYS.factions);
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          if (parsed && Array.isArray(parsed.list)) {
-            log(`Using stale cached list (${parsed.list.length})`);
-            return { set: new Set(parsed.list.map(norm)), source: 'stale-cache', count: parsed.list.length, error: e.message };
-          }
-        }
-      } catch {}
-      log('No faction list available.');
-      return { set: new Set(), source: 'none', count: 0, error: e.message || 'no list' };
-    }
+    } catch {}
+    report([`<b>Network error</b>: ${err}`, `No list available.`]);
+    return { set: new Set(), source: 'none', count: 0, error: err };
   }
+}
+
 
   // ---------- ORIGINAL DOM LOGIC ----------
   function extractFactionName() {
