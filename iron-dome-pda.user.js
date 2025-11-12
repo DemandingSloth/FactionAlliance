@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Torn PDA: Iron Dome Checker (All-in-One + Manual Fallback)
+// @name         Torn PDA: Iron Dome Checker (With Fetch Tester)
 // @namespace    WetNightmare
-// @version      1.5.0
-// @description  Original selectors + robust debug panel + multi-mirror JSON loader + manual paste fallback. Inserts banner under .buttons-list on matching factions.
+// @version      1.6.0
+// @description  Original selectors + banner under .buttons-list; multi-mirror JSON loader with visible errors, manual paste, and a Test Fetch button.
 // @match        https://www.torn.com/profiles.php*
 // @run-at       document-idle
 // @noframes
@@ -12,189 +12,224 @@
   'use strict';
 
   const CONFIG = {
-    // --- JSON mirrors (first working one wins) ---
+    // Try these in order (first that works wins)
     mirrors: [
-      'https://cdn.jsdelivr.net/gh/WetNightmare/FactionAlliance@main/iron-dome-factions.json?v=1',
+      'https://cdn.jsdelivr.net/gh/WetNightmare/FactionAlliance@main/iron-dome-factions.json',
       'https://wetnightmare.github.io/FactionAlliance/iron-dome-factions.json',
-      'https://raw.githubusercontent.com/WetNightmare/FactionAlliance/main/iron-dome-factions.json'
+      'https://raw.githubusercontent.com/WetNightmare/FactionAlliance/main/iron-dome-factions.json',
+      // read-only proxy that adds permissive CORS; works for many WebViews
+      'https://r.jina.ai/http://raw.githubusercontent.com/WetNightmare/FactionAlliance/main/iron-dome-factions.json',
+      'https://rawcdn.githack.com/WetNightmare/FactionAlliance/main/iron-dome-factions.json'
     ],
 
-    // --- Banner (image loads fine without CORS) ---
     bannerUrl: 'https://github.com/WetNightmare/FactionAlliance/blob/f373bfec9fd256ca995895a19c64141c05c685a0/iron-dome-banner-750x140.png?raw=true',
 
-    cacheTtlMs: 12 * 60 * 60 * 1000,  // 12 hours
+    cacheTtlMs: 12 * 60 * 60 * 1000, // 12h
     badgeText: 'MEMBER OF THE IRON DOME',
     bannerId: 'iron-dome-banner',
     badgeId:   'iron-dome-tag',
 
-    // Behavior + Diagnostics
-    debug: true,                         // always show panel while debugging
-    debugPanelId: 'iron-dome-debug-panel',
-    forceShow: false,                    // bypass only the membership check (still waits for DOM anchors)
-    maxWaitMs: 12000,                    // max wait for DOM bits
-    evalDebounceMs: 250,                 // debounce for SPA updates
+    // Diagnostics & behavior
+    debug: true,
+    panelId: 'iron-dome-debug',
+    forceShow: false,       // bypass membership check but still wait for DOM
+    maxWaitMs: 12000,
+    evalDebounceMs: 250
   };
 
-  const STORAGE_KEYS = {
-    factionsCache:  'ironDome.factions.cache.v5',   // { ts, list[] }
-    factionsManual: 'ironDome.factions.manual.v1'   // stringified list[] set via Manual Paste
+  // Single, consistent storage keys
+  const STORAGE = {
+    cache:  'ironDome.factions.cache.v6',   // { ts, list[] }
+    manual: 'ironDome.factions.manual.v1'   // list[]
   };
 
-  // ---------------- Utilities + Debug Panel ----------------
-  const norm  = s => (s || '').trim().toLowerCase();
-  const sleep = ms => new Promise(r => setTimeout(r, ms));
-
-  function ensureDebugPanel() {
-    let p = document.getElementById(CONFIG.debugPanelId);
-    if (!p) {
-      p = document.createElement('div');
-      p.id = CONFIG.debugPanelId;
-      p.style.cssText = [
+  // ---------- Debug panel ----------
+  function ensurePanel() {
+    let box = document.getElementById(CONFIG.panelId);
+    if (!box) {
+      box = document.createElement('div');
+      box.id = CONFIG.panelId;
+      box.style.cssText = [
         'position:fixed','right:8px','bottom:8px','z-index:2147483647',
         'max-width:360px','font:12px/1.4 system-ui,Arial,sans-serif',
         'background:#0b0f13cc','color:#d7e0ea','border:1px solid #2b3440',
         'padding:8px 10px 10px','border-radius:10px','backdrop-filter:blur(2px)',
         'box-shadow:0 6px 18px rgba(0,0,0,.45)'
       ].join(';');
-      document.documentElement.appendChild(p);
 
-      // controls row
       const controls = document.createElement('div');
-      controls.style.cssText = 'display:flex; gap:6px; margin-bottom:6px; align-items:center; flex-wrap:wrap;';
+      controls.style.cssText = 'display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap;align-items:center';
+
+      const btnTest = document.createElement('button');
+      btnTest.textContent = 'Test Fetch';
+      styleBtn(btnTest);
+      btnTest.onclick = testFetch;
+
       const btnPaste = document.createElement('button');
       btnPaste.textContent = 'Paste List';
-      btnPaste.style.cssText = 'padding:3px 8px; border-radius:6px; border:1px solid #3a4756; background:#17202a; color:#d7e0ea; cursor:pointer;';
-      btnPaste.onclick = handleManualPaste;
+      styleBtn(btnPaste);
+      btnPaste.onclick = pasteManual;
 
       const btnClear = document.createElement('button');
       btnClear.textContent = 'Clear Cache';
-      btnClear.style.cssText = 'padding:3px 8px; border-radius:6px; border:1px solid #3a4756; background:#17202a; color:#d7e0ea; cursor:pointer;';
+      styleBtn(btnClear);
       btnClear.onclick = () => {
-        localStorage.removeItem(STORAGE_KEYS.factionsCache);
-        localStorage.removeItem(STORAGE_KEYS.factionsManual);
-        report(['<b>IronDome</b>: caches cleared. Reload a profile.']);
+        localStorage.removeItem(STORAGE.cache);
+        localStorage.removeItem(STORAGE.manual);
+        logLines(['<b>Cache cleared.</b> Reload a profile.']);
       };
 
       const btnHide = document.createElement('button');
       btnHide.textContent = 'Hide';
-      btnHide.style.cssText = 'padding:3px 8px; border-radius:6px; border:1px solid #3a4756; background:#17202a; color:#d7e0ea; cursor:pointer;';
-      btnHide.onclick = () => p.style.display = 'none';
+      styleBtn(btnHide);
+      btnHide.onclick = () => box.style.display = 'none';
 
+      controls.appendChild(btnTest);
       controls.appendChild(btnPaste);
       controls.appendChild(btnClear);
       controls.appendChild(btnHide);
 
-      const logBox = document.createElement('div');
-      logBox.id = CONFIG.debugPanelId + '-log';
-      p.appendChild(controls);
-      p.appendChild(logBox);
-    }
-    return p;
-  }
-  function report(lines) {
-    if (!CONFIG.debug) return;
-    ensureDebugPanel();
-    const logBox = document.getElementById(CONFIG.debugPanelId + '-log');
-    if (logBox) logBox.innerHTML = lines.map(l => `<div>${l}</div>`).join('');
-  }
-  // keep panel alive even if Torn re-renders
-  setInterval(() => ensureDebugPanel(), 1000);
-  // show boot
-  report(['<b>IronDome</b> booting…']);
+      const log = document.createElement('div');
+      log.id = CONFIG.panelId + '-log';
 
-  // ---------------- Manual Paste Fallback ----------------
-  function handleManualPaste() {
-    const s = prompt('Paste your JSON array of faction names (e.g. ["The Swarm","Stage Fright",...])');
+      box.appendChild(controls);
+      box.appendChild(log);
+      document.documentElement.appendChild(box);
+    }
+    return box;
+  }
+  function styleBtn(b){ b.style.cssText='padding:3px 8px;border-radius:6px;border:1px solid #3a4756;background:#17202a;color:#d7e0ea;cursor:pointer'; }
+  function logLines(lines){
+    if (!CONFIG.debug) return;
+    ensurePanel();
+    const log = document.getElementById(CONFIG.panelId + '-log');
+    if (log) log.innerHTML = lines.map(x => `<div>${x}</div>`).join('');
+  }
+  // keep panel alive if Torn re-renders
+  setInterval(() => CONFIG.debug && ensurePanel(), 1000);
+  logLines(['<b>IronDome</b> booting…']);
+
+  // ---------- Helpers ----------
+  const norm  = s => (s || '').trim().toLowerCase();
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  // Manual paste
+  function pasteManual() {
+    const s = prompt('Paste JSON array of faction names (e.g., ["The Swarm","Stage Fright"])');
     if (!s) return;
     try {
       const list = JSON.parse(s);
       if (!Array.isArray(list)) throw new Error('Not an array');
-      localStorage.setItem(STORAGE_KEYS.factionsManual, JSON.stringify(list));
-      localStorage.setItem(STORAGE_KEYS.factionsCache, JSON.stringify({ ts: Date.now(), list }));
-      report([`<b>Manual list saved</b>: ${list.length} factions. Reloading logic…`]);
-      // kick a re-eval after a tick
-      setTimeout(() => scheduleEvaluate('manual-paste'), 100);
-    } catch (e) {
-      report([`<span style="color:#ff7272"><b>Manual paste error:</b> ${e.message || e}</span>`]);
+      localStorage.setItem(STORAGE.manual, JSON.stringify(list));
+      localStorage.setItem(STORAGE.cache, JSON.stringify({ ts: Date.now(), list }));
+      logLines([`<b>Manual list saved</b>: ${list.length} factions. Re-evaluating…`]);
+      setTimeout(() => scheduleEval('manual-paste'), 100);
+    } catch(e) {
+      logLines([`<span style="color:#ff7272"><b>Manual paste error:</b> ${e.message || e}</span>`]);
     }
   }
 
-  // ---------------- JSON Loader (cache + mirrors + ghost detection) ----------------
+  // ---------- JSON loader with explicit error lines ----------
   async function loadFactionSet() {
-    // 0) Manual list takes precedence if present
+    // Manual first
     try {
-      const man = localStorage.getItem(STORAGE_KEYS.factionsManual);
+      const man = localStorage.getItem(STORAGE.manual);
       if (man) {
         const list = JSON.parse(man);
         if (Array.isArray(list) && list.length) {
-          report([`<b>IronDome</b>: using <u>manual</u> list (${list.length})`]);
-          // also refresh cache timestamp so it sticks around
-          localStorage.setItem(STORAGE_KEYS.factionsCache, JSON.stringify({ ts: Date.now(), list }));
-          return { set: new Set(list.map(norm)), source: 'manual', count: list.length };
+          localStorage.setItem(STORAGE.cache, JSON.stringify({ ts: Date.now(), list }));
+          logLines([`<b>List source:</b> manual (${list.length})`]);
+          return { set: new Set(list.map(norm)), src: 'manual', count: list.length };
         }
       }
     } catch {}
 
-    // 1) Fresh cache
+    // Fresh cache
     try {
-      const raw = localStorage.getItem(STORAGE_KEYS.factionsCache);
-      if (raw) {
-        const parsed = JSON.parse(raw);
+      const c = localStorage.getItem(STORAGE.cache);
+      if (c) {
+        const parsed = JSON.parse(c);
         if (parsed && Array.isArray(parsed.list) && Date.now() - parsed.ts < CONFIG.cacheTtlMs) {
-          report([`<b>IronDome</b>: cache (${parsed.list.length})`]);
-          return { set: new Set(parsed.list.map(norm)), source: 'cache', count: parsed.list.length };
+          logLines([`<b>List source:</b> cache (${parsed.list.length})`]);
+          return { set: new Set(parsed.list.map(norm)), src: 'cache', count: parsed.list.length };
         }
       }
     } catch (e) {
-      report([`<span style="color:#ff7272"><b>Cache read error:</b> ${e.message || e}</span>`]);
+      logLines([`<span style="color:#ff7272"><b>Cache read error:</b> ${e.message || e}</span>`]);
     }
 
-    // 2) Try mirrors (detect opaque/empty bodies)
-    let lastError = '';
+    // Mirrors with ghost/opaque detection
+    let lastErr = '';
     for (const url of CONFIG.mirrors) {
       try {
-        const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('Timeout (8s)')), 8000));
-        const res = await Promise.race([ fetch(url, { cache: 'no-store' }), timeout ]);
-
-        // "Ghost" responses in some WebViews: res.ok may be true but body unreadable
+        const timeout = new Promise((_,rej)=>setTimeout(()=>rej(new Error('Timeout (8s)')),8000));
+        const res = await Promise.race([fetch(url, { cache: 'no-store' }), timeout]);
         if (!res || !res.ok) throw new Error(`HTTP ${res ? res.status : 'no response'}`);
-        const text = await res.text();                  // never trust .json() in ghost cases
-        if (!text || text.length < 5) throw new Error('Empty response body (CORS/blocked?)');
+        const text = await res.text();
+        if (!text || text.length < 5) throw new Error('Empty response (CORS/blocked?)');
 
         let list;
-        try { list = JSON.parse(text); } catch (e) { throw new Error('Invalid JSON: ' + e.message); }
+        try { list = JSON.parse(text); } catch(e){ throw new Error('Invalid JSON: ' + e.message); }
         if (!Array.isArray(list)) throw new Error('JSON not array');
 
-        localStorage.setItem(STORAGE_KEYS.factionsCache, JSON.stringify({ ts: Date.now(), list }));
-        report([`<b>IronDome</b>: network (${list.length}) from <code>${url}</code>`]);
-        return { set: new Set(list.map(norm)), source: url, count: list.length };
-      } catch (err) {
-        lastError = err && (err.message || String(err));
-        report([`<span style="color:#ff7272"><b>Fetch failed</b> ${url}: ${lastError}</span>`]);
+        localStorage.setItem(STORAGE.cache, JSON.stringify({ ts: Date.now(), list }));
+        logLines([`<b>List source:</b> network (${list.length}) from <code>${url}</code>`]);
+        return { set: new Set(list.map(norm)), src: url, count: list.length };
+      } catch (e) {
+        lastErr = e && (e.message || String(e));
+        // Visible red line per URL
+        logLines([`<span style="color:#ff7272"><b>Fetch failed</b> ${url}: ${lastErr}</span>`]);
       }
     }
 
-    // 3) Stale cache as last resort
+    // Stale cache fallback
     try {
-      const raw = localStorage.getItem(STORAGE_KEYS.factionsCache);
+      const raw = localStorage.getItem(STORAGE.cache);
       if (raw) {
         const parsed = JSON.parse(raw);
         if (parsed && Array.isArray(parsed.list)) {
-          report([
-            `<span style="color:#ffd166"><b>Network error</b>:</span> ${lastError || 'unknown'}`,
+          logLines([
+            `<span style="color:#ffd166"><b>Network error:</b></span> ${lastErr || 'unknown'}`,
             `Using <b>stale cache</b>: ${parsed.list.length} factions`
           ]);
-          return { set: new Set(parsed.list.map(norm)), source: 'stale-cache', count: parsed.list.length, error: lastError };
+          return { set: new Set(parsed.list.map(norm)), src: 'stale-cache', count: parsed.list.length };
         }
       }
     } catch {}
 
-    // 4) Nothing worked → visible line but NOT a thrown error
-    report([`<span style="color:#ff7272"><b>JSON load failed</b>:</span> ${lastError || 'blocked/empty response'}<br/>Use <b>Paste List</b> to proceed offline.`]);
-    return { set: new Set(), source: 'none', count: 0, error: lastError || 'fetch failed' };
+    // Nothing worked
+    logLines([
+      `<span style="color:#ff7272"><b>JSON load failed:</b></span> ${lastErr || 'blocked/empty'}`,
+      `Click <b>Paste List</b> to proceed offline.`
+    ]);
+    return { set: new Set(), src: 'none', count: 0 };
   }
 
-  // ---------------- Original DOM Logic (your selectors) ----------------
+  // Extra: active tester button logic
+  async function testFetch() {
+    ensurePanel();
+    const out = [];
+    for (const url of CONFIG.mirrors) {
+      const start = performance.now();
+      try {
+        const timeout = new Promise((_,rej)=>setTimeout(()=>rej(new Error('Timeout (8s)')),8000));
+        const res = await Promise.race([fetch(url, { cache: 'no-store' }), timeout]);
+        const elapsed = Math.round(performance.now() - start);
+        if (!res || !res.ok) throw new Error(`HTTP ${res ? res.status : 'no response'}`);
+        const text = await res.text();
+        const bytes = text ? text.length : 0;
+        let parsed; try { parsed = JSON.parse(text); } catch(e){ throw new Error('Invalid JSON: ' + e.message); }
+        if (!Array.isArray(parsed)) throw new Error('JSON not array');
+        out.push(`<span style="color:#9be7a9"><b>OK</b></span> ${elapsed}ms • ${bytes} bytes • <code>${url}</code>`);
+      } catch (e) {
+        const elapsed = Math.round(performance.now() - start);
+        out.push(`<span style="color:#ff7272"><b>FAIL</b></span> ${elapsed}ms • ${e.message || e} • <code>${url}</code>`);
+      }
+    }
+    logLines([`<b>Fetch test results</b>`, ...out]);
+  }
+
+  // ---------- Original DOM logic (your selectors/placement) ----------
   function extractFactionName() {
     const span = Array.from(document.querySelectorAll('span[title*=" of "]'))
       .find(el => el.querySelector('a[href*="/factions.php"]'));
@@ -207,7 +242,12 @@
     return document.querySelector('.buttons-list');
   }
 
-  function buildBannerImg() {
+  function removeExisting() {
+    document.getElementById(CONFIG.bannerId)?.remove();
+    document.getElementById(CONFIG.badgeId)?.remove();
+  }
+
+  function buildBanner() {
     const img = document.createElement('img');
     img.id = CONFIG.bannerId;
     img.src = CONFIG.bannerUrl;
@@ -223,8 +263,7 @@
     img.loading = 'lazy';
     return img;
   }
-
-  function buildBadgeTag() {
+  function buildTag() {
     const tag = document.createElement('div');
     tag.id = CONFIG.badgeId;
     tag.textContent = CONFIG.badgeText;
@@ -235,27 +274,21 @@
     return tag;
   }
 
-  function removeExisting() {
-    document.getElementById(CONFIG.bannerId)?.remove();
-    document.getElementById(CONFIG.badgeId)?.remove();
-  }
-
-  function insertBannerAndTag() {
+  function insertUI() {
     const buttonsList = findButtonsList();
     if (buttonsList) {
-      const img = buildBannerImg();
-      const tag = buildBadgeTag();
+      const img = buildBanner();
+      const tag = buildTag();
       buttonsList.insertAdjacentElement('afterend', img);
       img.insertAdjacentElement('afterend', tag);
-      return { placed: true, where: '.buttons-list(afterend)' };
+      return '.buttons-list(afterend)';
     }
-    // fallback: visible somewhere predictable if buttons list missing
     const host = document.querySelector('#mainContainer, main, #content, body') || document.body;
-    const img = buildBannerImg();
-    const tag = buildBadgeTag();
+    const img = buildBanner();
+    const tag = buildTag();
     host.appendChild(img);
     host.appendChild(tag);
-    return { placed: true, where: 'main/content/body(append)' };
+    return 'main/content/body(append)';
   }
 
   async function waitForProfileLoad() {
@@ -271,39 +304,38 @@
     return 'timeout';
   }
 
-  // ---------------- Main (debounced evaluator) ----------------
-  let factionsSet  = new Set();
-  let factionsMeta = { source: 'none', count: 0 };
-  let evalTimer    = null;
-  let evaluating   = false;
+  // ---------- Main (debounced) ----------
+  let listSet = new Set();
+  let listSrc = 'none';
+  let listCount = 0;
+  let evaluating = false;
+  let timer = null;
 
-  function scheduleEvaluate(reason = 'mutation') {
-    if (evalTimer) clearTimeout(evalTimer);
-    evalTimer = setTimeout(() => { void evaluateProfile(reason); }, CONFIG.evalDebounceMs);
+  function scheduleEval(reason='mutation') {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => void evaluate(reason), CONFIG.evalDebounceMs);
   }
 
-  async function evaluateProfile(reason = 'manual') {
+  async function evaluate(reason='init') {
     if (evaluating) return;
     evaluating = true;
     try {
-      const phase   = await waitForProfileLoad();
+      const phase = await waitForProfileLoad();
       const faction = extractFactionName();
-      const matched = CONFIG.forceShow || (faction && factionsSet.has(norm(faction)));
+      const inAlliance = CONFIG.forceShow || (faction && listSet.has(norm(faction)));
 
       removeExisting();
-      let placedInfo = { placed: false, where: '(skipped)' };
-      if (matched) placedInfo = insertBannerAndTag();
+      let where = '(skipped)';
+      if (inAlliance) where = insertUI();
 
-      report([
+      logLines([
         `<b>IronDome</b> — ${reason}`,
         `Wait phase: ${phase}`,
         `Faction: <b>${faction || '(not found)'}</b>`,
-        `List source: <b>${factionsMeta.source}</b> (${factionsMeta.count})`,
-        `In alliance (match | force): <b>${!!(faction && factionsSet.has(norm(faction)))} | ${CONFIG.forceShow}</b>`,
-        `Inserted: ${placedInfo.placed} @ ${placedInfo.where}`
+        `List source: <b>${listSrc}</b> (${listCount})`,
+        `In alliance (match | force): <b>${!!(faction && listSet.has(norm(faction)))} | ${CONFIG.forceShow}</b>`,
+        `Inserted: ${inAlliance} @ ${where}`
       ]);
-    } catch (e) {
-      report([`<span style="color:#ff7272"><b>Error:</b> ${e.message || e}</span>`]);
     } finally {
       evaluating = false;
     }
@@ -311,21 +343,20 @@
 
   async function init() {
     const meta = await loadFactionSet();
-    factionsSet  = meta.set;
-    factionsMeta = { source: meta.source, count: meta.count };
+    listSet = meta.set;
+    listSrc = meta.src;
+    listCount = meta.count;
 
-    await evaluateProfile('init');
+    await evaluate('init');
 
-    // Observe SPA DOM updates
-    const obs = new MutationObserver(() => scheduleEvaluate('mutation'));
+    const obs = new MutationObserver(() => scheduleEval('mutation'));
     obs.observe(document.documentElement, { childList: true, subtree: true });
 
-    // Observe URL changes
     let lastHref = location.href;
     setInterval(() => {
       if (location.href !== lastHref) {
         lastHref = location.href;
-        scheduleEvaluate('url-change');
+        scheduleEval('url-change');
       }
     }, 400);
   }
