@@ -14,12 +14,7 @@
   const CONFIG = {
     // Try these in order (first that works wins)
     mirrors: [
-      'https://cdn.jsdelivr.net/gh/WetNightmare/FactionAlliance@main/iron-dome-factions.json',
-      'https://wetnightmare.github.io/FactionAlliance/iron-dome-factions.json',
-      'https://raw.githubusercontent.com/WetNightmare/FactionAlliance/main/iron-dome-factions.json',
-      // read-only proxy that adds permissive CORS; works for many WebViews
-      'https://r.jina.ai/http://raw.githubusercontent.com/WetNightmare/FactionAlliance/main/iron-dome-factions.json',
-      'https://rawcdn.githack.com/WetNightmare/FactionAlliance/main/iron-dome-factions.json'
+      'https://raw.githubusercontent.com/WetNightmare/FactionAlliance/refs/heads/main/iron-dome-factions.json'
     ],
 
     bannerUrl: 'https://github.com/WetNightmare/FactionAlliance/blob/f373bfec9fd256ca995895a19c64141c05c685a0/iron-dome-banner-750x140.png?raw=true',
