@@ -21,7 +21,11 @@
     badgeText: 'MEMBER OF THE IRON DOME',
     bannerId: 'iron-dome-banner',
     badgeId: 'iron-dome-tag',
-
+    mirrors: [
+      'https://cdn.jsdelivr.net/gh/WetNightmare/FactionAlliance@main/iron-dome-factions.json?v=1',
+      'https://wetnightmare.github.io/FactionAlliance/iron-dome-factions.json',
+      'https://raw.githubusercontent.com/WetNightmare/FactionAlliance/main/iron-dome-factions.json'
+    ],
     // Diagnostics & behavior
     debug: true,                       // show panel + logs
     debugPanelId: 'iron-dome-debug-panel',
