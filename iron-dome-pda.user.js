@@ -76,51 +76,74 @@
 
   // ---------- JSON fetch + cache ----------
 async function loadFactionSet() {
-  // Try cache first
+  const debugMsg = (msg) => report([`<span style="color:#ff7373">${msg}</span>`]);
+
+  // 1️⃣ Try cache first
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.factions);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (parsed && Array.isArray(parsed.list) && Date.now() - parsed.ts < CONFIG.cacheTtlMs) {
-        report([`<b>IronDome</b> cache hit: ${parsed.list.length} factions`]);
+        report([`<b>IronDome</b>: using cached list (${parsed.list.length})`]);
         return { set: new Set(parsed.list.map(norm)), source: 'cache', count: parsed.list.length };
       }
     }
   } catch (e) {
-    report([`<b>Cache read error</b>: ${e.message || e}`]);
+    debugMsg(`Cache read error: ${e.message || e}`);
   }
 
-  // Fetch fresh (with timeout)
-  try {
-    const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('fetch timeout')), 8000));
-    const res = await Promise.race([ fetch(CONFIG.sourceUrl, { cache: 'no-store', mode: 'cors' }), timeout ]);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const list = await res.json();
-    if (!Array.isArray(list)) throw new Error('JSON not array');
-
-    localStorage.setItem(STORAGE_KEYS.factions, JSON.stringify({ ts: Date.now(), list }));
-    report([`<b>IronDome</b> network: ${list.length} factions`]);
-    return { set: new Set(list.map(norm)), source: 'network', count: list.length };
-  } catch (e) {
-    // Fallback to stale cache
-    const err = e && (e.message || String(e));
+  // 2️⃣ Try fetching JSON (multiple mirrors)
+  let lastError = '';
+  for (const url of CONFIG.mirrors || [CONFIG.sourceUrl]) {
     try {
-      const raw = localStorage.getItem(STORAGE_KEYS.factions);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (parsed && Array.isArray(parsed.list)) {
-          report([
-            `<b>Network error</b>: ${err}`,
-            `Using <b>stale cache</b>: ${parsed.list.length} factions`
-          ]);
-          return { set: new Set(parsed.list.map(norm)), source: 'stale-cache', count: parsed.list.length, error: err };
-        }
+      const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('Timeout (8s)')), 8000));
+      const res = await Promise.race([fetch(url, { cache: 'no-store' }), timeout]);
+
+      // Handle "ghost" opaque responses
+      if (!res || !res.ok || !res.body) throw new Error(`Fetch failed or blocked (${res && res.type})`);
+
+      const text = await res.text();
+      if (!text || text.length < 5) throw new Error('Empty response body (CORS?)');
+
+      let list;
+      try {
+        list = JSON.parse(text);
+      } catch (e) {
+        throw new Error('Invalid JSON: ' + e.message);
       }
-    } catch {}
-    report([`<b>Network error</b>: ${err}`, `No list available.`]);
-    return { set: new Set(), source: 'none', count: 0, error: err };
+      if (!Array.isArray(list)) throw new Error('JSON not array');
+
+      localStorage.setItem(STORAGE_KEYS.factions, JSON.stringify({ ts: Date.now(), list }));
+      report([`<b>IronDome</b>: network (${list.length}) from <code>${url}</code>`]);
+      return { set: new Set(list.map(norm)), source: url, count: list.length };
+    } catch (err) {
+      lastError = err.message || String(err);
+      debugMsg(`Fetch failed for ${url}: ${lastError}`);
+    }
   }
+
+  // 3️⃣ Try stale cache
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.factions);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && Array.isArray(parsed.list)) {
+        report([
+          `<b>Network error</b>: ${lastError || 'unknown'}`,
+          `Using <b>stale cache</b>: ${parsed.list.length} factions`
+        ]);
+        return { set: new Set(parsed.list.map(norm)), source: 'stale-cache', count: parsed.list.length };
+      }
+    }
+  } catch (e) {
+    debugMsg(`Cache recovery error: ${e.message || e}`);
+  }
+
+  // 4️⃣ Nothing worked → explicit debug output
+  debugMsg(`❌ JSON fetch failed: ${lastError || 'unknown (blocked or empty response)'}`);
+  return { set: new Set(), source: 'none', count: 0, error: lastError || 'fetch failed' };
 }
+
 
 
   // ---------- ORIGINAL DOM LOGIC ----------
