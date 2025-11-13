@@ -75,8 +75,8 @@
     img.id = CONFIG.bannerId;
     img.src = CONFIG.bannerUrl;
     img.alt = 'Iron Dome Alliance';
-    img.style.width = '750px';
-    img.style.height = '140px';
+    img.style.width = '375px';
+    img.style.height = '70px';
     img.style.border = '1px solid rgba(255,255,255,0.12)';
     img.style.borderRadius = '8px';
     img.style.display = 'block';
