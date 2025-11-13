@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Torn PDA: Iron Dome Checker (With Fetch Tester)
+// @name         Torn PDA: Iron Dome Checker (Local List Manager)
 // @namespace    WetNightmare
-// @version      1.6.0
-// @description  Original selectors + banner under .buttons-list; multi-mirror JSON loader with visible errors, manual paste, and a Test Fetch button.
+// @version      1.7.0
+// @description  No network. Original selectors + banner under .buttons-list. Built-in List Manager (edit/paste/export), debug panel, debounced evaluator.
 // @match        https://www.torn.com/profiles.php*
 // @run-at       document-idle
 // @noframes
@@ -12,33 +12,31 @@
   'use strict';
 
   const CONFIG = {
-    // Try these in order (first that works wins)
-    mirrors: [
-      'https://raw.githubusercontent.com/WetNightmare/FactionAlliance/refs/heads/main/iron-dome-factions.json'
-    ],
-
+    // --- Banner (image is fine in PDA WebView) ---
     bannerUrl: 'https://github.com/WetNightmare/FactionAlliance/blob/f373bfec9fd256ca995895a19c64141c05c685a0/iron-dome-banner-750x140.png?raw=true',
 
-    cacheTtlMs: 12 * 60 * 60 * 1000, // 12h
+    // --- Behavior & Diagnostics ---
+    cacheTtlMs: 365 * 24 * 60 * 60 * 1000, // keep local list "fresh" for a year
     badgeText: 'MEMBER OF THE IRON DOME',
-    bannerId: 'iron-dome-banner',
+    bannerId:  'iron-dome-banner',
     badgeId:   'iron-dome-tag',
 
-    // Diagnostics & behavior
-    debug: true,
+    debug: true,                 // show panel
     panelId: 'iron-dome-debug',
-    forceShow: false,       // bypass membership check but still wait for DOM
+    forceShow: false,            // bypass membership check but still waits for DOM anchors
     maxWaitMs: 12000,
     evalDebounceMs: 250
   };
 
-  // Single, consistent storage keys
+  // Single storage slot for your local list
   const STORAGE = {
-    cache:  'ironDome.factions.cache.v6',   // { ts, list[] }
-    manual: 'ironDome.factions.manual.v1'   // list[]
+    cache: 'ironDome.factions.local.v1'   // { ts, list[] }
   };
 
-  // ---------- Debug panel ----------
+  // ================= Utilities & Debug Panel =================
+  const norm  = s => (s || '').trim().toLowerCase();
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+
   function ensurePanel() {
     let box = document.getElementById(CONFIG.panelId);
     if (!box) {
@@ -46,7 +44,7 @@
       box.id = CONFIG.panelId;
       box.style.cssText = [
         'position:fixed','right:8px','bottom:8px','z-index:2147483647',
-        'max-width:360px','font:12px/1.4 system-ui,Arial,sans-serif',
+        'max-width:380px','font:12px/1.4 system-ui,Arial,sans-serif',
         'background:#0b0f13cc','color:#d7e0ea','border:1px solid #2b3440',
         'padding:8px 10px 10px','border-radius:10px','backdrop-filter:blur(2px)',
         'box-shadow:0 6px 18px rgba(0,0,0,.45)'
@@ -55,34 +53,13 @@
       const controls = document.createElement('div');
       controls.style.cssText = 'display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap;align-items:center';
 
-      const btnTest = document.createElement('button');
-      btnTest.textContent = 'Test Fetch';
-      styleBtn(btnTest);
-      btnTest.onclick = testFetch;
+      const btnEdit  = makeBtn('Edit List', openEditor);
+      const btnPaste = makeBtn('Paste List', pasteList);
+      const btnExport= makeBtn('Export', exportList);
+      const btnClear = makeBtn('Clear', clearList);
+      const btnHide  = makeBtn('Hide', () => box.style.display='none');
 
-      const btnPaste = document.createElement('button');
-      btnPaste.textContent = 'Paste List';
-      styleBtn(btnPaste);
-      btnPaste.onclick = pasteManual;
-
-      const btnClear = document.createElement('button');
-      btnClear.textContent = 'Clear Cache';
-      styleBtn(btnClear);
-      btnClear.onclick = () => {
-        localStorage.removeItem(STORAGE.cache);
-        localStorage.removeItem(STORAGE.manual);
-        logLines(['<b>Cache cleared.</b> Reload a profile.']);
-      };
-
-      const btnHide = document.createElement('button');
-      btnHide.textContent = 'Hide';
-      styleBtn(btnHide);
-      btnHide.onclick = () => box.style.display = 'none';
-
-      controls.appendChild(btnTest);
-      controls.appendChild(btnPaste);
-      controls.appendChild(btnClear);
-      controls.appendChild(btnHide);
+      controls.append(btnEdit, btnPaste, btnExport, btnClear, btnHide);
 
       const log = document.createElement('div');
       log.id = CONFIG.panelId + '-log';
@@ -93,138 +70,129 @@
     }
     return box;
   }
-  function styleBtn(b){ b.style.cssText='padding:3px 8px;border-radius:6px;border:1px solid #3a4756;background:#17202a;color:#d7e0ea;cursor:pointer'; }
+  function makeBtn(text, onclick){
+    const b = document.createElement('button');
+    b.textContent = text;
+    b.onclick = onclick;
+    b.style.cssText = 'padding:3px 8px;border-radius:6px;border:1px solid #3a4756;background:#17202a;color:#d7e0ea;cursor:pointer';
+    return b;
+  }
   function logLines(lines){
     if (!CONFIG.debug) return;
     ensurePanel();
     const log = document.getElementById(CONFIG.panelId + '-log');
     if (log) log.innerHTML = lines.map(x => `<div>${x}</div>`).join('');
   }
-  // keep panel alive if Torn re-renders
-  setInterval(() => CONFIG.debug && ensurePanel(), 1000);
-  logLines(['<b>IronDome</b> booting…']);
+  setInterval(() => CONFIG.debug && ensurePanel(), 1000); // keep panel alive
+  logLines(['<b>IronDome</b> (Local List) booting…']);
 
-  // ---------- Helpers ----------
-  const norm  = s => (s || '').trim().toLowerCase();
-  const sleep = ms => new Promise(r => setTimeout(r, ms));
-
-  // Manual paste
-  function pasteManual() {
-    const s = prompt('Paste JSON array of faction names (e.g., ["The Swarm","Stage Fright"])');
-    if (!s) return;
-    try {
-      const list = JSON.parse(s);
-      if (!Array.isArray(list)) throw new Error('Not an array');
-      localStorage.setItem(STORAGE.manual, JSON.stringify(list));
-      localStorage.setItem(STORAGE.cache, JSON.stringify({ ts: Date.now(), list }));
-      logLines([`<b>Manual list saved</b>: ${list.length} factions. Re-evaluating…`]);
-      setTimeout(() => scheduleEval('manual-paste'), 100);
-    } catch(e) {
-      logLines([`<span style="color:#ff7272"><b>Manual paste error:</b> ${e.message || e}</span>`]);
-    }
-  }
-
-  // ---------- JSON loader with explicit error lines ----------
-  async function loadFactionSet() {
-    // Manual first
-    try {
-      const man = localStorage.getItem(STORAGE.manual);
-      if (man) {
-        const list = JSON.parse(man);
-        if (Array.isArray(list) && list.length) {
-          localStorage.setItem(STORAGE.cache, JSON.stringify({ ts: Date.now(), list }));
-          logLines([`<b>List source:</b> manual (${list.length})`]);
-          return { set: new Set(list.map(norm)), src: 'manual', count: list.length };
-        }
-      }
-    } catch {}
-
-    // Fresh cache
-    try {
-      const c = localStorage.getItem(STORAGE.cache);
-      if (c) {
-        const parsed = JSON.parse(c);
-        if (parsed && Array.isArray(parsed.list) && Date.now() - parsed.ts < CONFIG.cacheTtlMs) {
-          logLines([`<b>List source:</b> cache (${parsed.list.length})`]);
-          return { set: new Set(parsed.list.map(norm)), src: 'cache', count: parsed.list.length };
-        }
-      }
-    } catch (e) {
-      logLines([`<span style="color:#ff7272"><b>Cache read error:</b> ${e.message || e}</span>`]);
-    }
-
-    // Mirrors with ghost/opaque detection
-    let lastErr = '';
-    for (const url of CONFIG.mirrors) {
-      try {
-        const timeout = new Promise((_,rej)=>setTimeout(()=>rej(new Error('Timeout (8s)')),8000));
-        const res = await Promise.race([fetch(url, { cache: 'no-store' }), timeout]);
-        if (!res || !res.ok) throw new Error(`HTTP ${res ? res.status : 'no response'}`);
-        const text = await res.text();
-        if (!text || text.length < 5) throw new Error('Empty response (CORS/blocked?)');
-
-        let list;
-        try { list = JSON.parse(text); } catch(e){ throw new Error('Invalid JSON: ' + e.message); }
-        if (!Array.isArray(list)) throw new Error('JSON not array');
-
-        localStorage.setItem(STORAGE.cache, JSON.stringify({ ts: Date.now(), list }));
-        logLines([`<b>List source:</b> network (${list.length}) from <code>${url}</code>`]);
-        return { set: new Set(list.map(norm)), src: url, count: list.length };
-      } catch (e) {
-        lastErr = e && (e.message || String(e));
-        // Visible red line per URL
-        logLines([`<span style="color:#ff7272"><b>Fetch failed</b> ${url}: ${lastErr}</span>`]);
-      }
-    }
-
-    // Stale cache fallback
+  // ================= Local List Store =================
+  function readLocalList() {
     try {
       const raw = localStorage.getItem(STORAGE.cache);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (parsed && Array.isArray(parsed.list)) {
-          logLines([
-            `<span style="color:#ffd166"><b>Network error:</b></span> ${lastErr || 'unknown'}`,
-            `Using <b>stale cache</b>: ${parsed.list.length} factions`
-          ]);
-          return { set: new Set(parsed.list.map(norm)), src: 'stale-cache', count: parsed.list.length };
-        }
-      }
-    } catch {}
-
-    // Nothing worked
-    logLines([
-      `<span style="color:#ff7272"><b>JSON load failed:</b></span> ${lastErr || 'blocked/empty'}`,
-      `Click <b>Paste List</b> to proceed offline.`
-    ]);
-    return { set: new Set(), src: 'none', count: 0 };
-  }
-
-  // Extra: active tester button logic
-  async function testFetch() {
-    ensurePanel();
-    const out = [];
-    for (const url of CONFIG.mirrors) {
-      const start = performance.now();
-      try {
-        const timeout = new Promise((_,rej)=>setTimeout(()=>rej(new Error('Timeout (8s)')),8000));
-        const res = await Promise.race([fetch(url, { cache: 'no-store' }), timeout]);
-        const elapsed = Math.round(performance.now() - start);
-        if (!res || !res.ok) throw new Error(`HTTP ${res ? res.status : 'no response'}`);
-        const text = await res.text();
-        const bytes = text ? text.length : 0;
-        let parsed; try { parsed = JSON.parse(text); } catch(e){ throw new Error('Invalid JSON: ' + e.message); }
-        if (!Array.isArray(parsed)) throw new Error('JSON not array');
-        out.push(`<span style="color:#9be7a9"><b>OK</b></span> ${elapsed}ms • ${bytes} bytes • <code>${url}</code>`);
-      } catch (e) {
-        const elapsed = Math.round(performance.now() - start);
-        out.push(`<span style="color:#ff7272"><b>FAIL</b></span> ${elapsed}ms • ${e.message || e} • <code>${url}</code>`);
-      }
+      if (!raw) return { list: [], ts: 0 };
+      const obj = JSON.parse(raw);
+      if (!obj || !Array.isArray(obj.list)) return { list: [], ts: 0 };
+      return { list: obj.list, ts: obj.ts || 0 };
+    } catch {
+      return { list: [], ts: 0 };
     }
-    logLines([`<b>Fetch test results</b>`, ...out]);
+  }
+  function writeLocalList(list) {
+    localStorage.setItem(STORAGE.cache, JSON.stringify({ ts: Date.now(), list }));
   }
 
-  // ---------- Original DOM logic (your selectors/placement) ----------
+  // ================= List Manager UI =================
+  function openEditor() {
+    const current = readLocalList().list;
+    const text = current.join('\n');
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.rows = 12;
+    area.style.cssText = 'width:100%;box-sizing:border-box;background:#0f1720;color:#d7e0ea;border:1px solid #2b3440;border-radius:6px;padding:8px;outline:none';
+
+    const wrapper = document.createElement('div');
+    wrapper.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:#0008;display:flex;align-items:center;justify-content:center';
+    const modal = document.createElement('div');
+    modal.style.cssText = 'width:90%;max-width:520px;background:#0b0f13;color:#d7e0ea;border:1px solid #2b3440;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.6);padding:12px';
+    modal.innerHTML = `
+      <div style="font-weight:700;margin-bottom:8px">Iron Dome Factions (one per line)</div>
+    `;
+    const buttons = document.createElement('div');
+    buttons.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;margin-top:8px';
+    const btnCancel = makeBtn('Cancel', () => document.body.removeChild(wrapper));
+    const btnSave   = makeBtn('Save', () => {
+      const lines = area.value.split('\n').map(s => s.trim()).filter(Boolean);
+      writeLocalList(lines);
+      document.body.removeChild(wrapper);
+      logLines([`<b>List saved</b>: ${lines.length} factions`]);
+      setTimeout(() => scheduleEval('edit-save'), 50);
+    });
+
+    modal.appendChild(area);
+    buttons.append(btnCancel, btnSave);
+    modal.appendChild(buttons);
+    wrapper.appendChild(modal);
+    document.body.appendChild(wrapper);
+  }
+
+  function pasteList() {
+    // Try clipboard; fall back to prompt
+    const doPrompt = async () => {
+      const s = prompt('Paste JSON array (["Faction A","Faction B",...]) OR plain text (one per line).');
+      if (!s) return;
+      applyPasted(s);
+    };
+    if (navigator.clipboard && navigator.clipboard.readText) {
+      navigator.clipboard.readText().then(text => {
+        if (text && text.trim()) applyPasted(text);
+        else doPrompt();
+      }).catch(doPrompt);
+    } else {
+      doPrompt();
+    }
+  }
+  function applyPasted(s) {
+    try {
+      let list;
+      if (s.trim().startsWith('[')) {
+        const arr = JSON.parse(s);
+        if (!Array.isArray(arr)) throw new Error('Not an array');
+        list = arr.map(x => String(x));
+      } else {
+        list = s.split('\n').map(t => t.trim()).filter(Boolean);
+      }
+      writeLocalList(list);
+      logLines([`<b>List saved (pasted)</b>: ${list.length} factions`]);
+      setTimeout(() => scheduleEval('paste'), 50);
+    } catch (e) {
+      logLines([`<span style="color:#ff7272"><b>Paste error:</b> ${e.message || e}</span>`]);
+    }
+  }
+
+  function exportList() {
+    const list = readLocalList().list;
+    const json = JSON.stringify(list, null, 2);
+    // Best-effort copy; also show in prompt for manual copy if needed
+    let copied = false;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(json).then(() => {
+        copied = true;
+        logLines([`<b>Exported</b> ${list.length} factions to clipboard.`]);
+      }).catch(() => {});
+    }
+    if (!copied) {
+      prompt('Copy your JSON:', json);
+      logLines([`<b>Exported</b> ${list.length} factions (shown in prompt).`]);
+    }
+  }
+  function clearList() {
+    localStorage.removeItem(STORAGE.cache);
+    logLines(['<b>List cleared.</b> Add items via Edit/Paste.']);
+    scheduleEval('clear');
+  }
+
+  // ================= Original DOM logic =================
   function extractFactionName() {
     const span = Array.from(document.querySelectorAll('span[title*=" of "]'))
       .find(el => el.querySelector('a[href*="/factions.php"]'));
@@ -235,11 +203,6 @@
 
   function findButtonsList() {
     return document.querySelector('.buttons-list');
-  }
-
-  function removeExisting() {
-    document.getElementById(CONFIG.bannerId)?.remove();
-    document.getElementById(CONFIG.badgeId)?.remove();
   }
 
   function buildBanner() {
@@ -268,7 +231,10 @@
     tag.style.marginTop = '6px';
     return tag;
   }
-
+  function removeExisting() {
+    document.getElementById(CONFIG.bannerId)?.remove();
+    document.getElementById(CONFIG.badgeId)?.remove();
+  }
   function insertUI() {
     const buttonsList = findButtonsList();
     if (buttonsList) {
@@ -299,9 +265,8 @@
     return 'timeout';
   }
 
-  // ---------- Main (debounced) ----------
+  // ================= Main (debounced) =================
   let listSet = new Set();
-  let listSrc = 'none';
   let listCount = 0;
   let evaluating = false;
   let timer = null;
@@ -317,8 +282,8 @@
     try {
       const phase = await waitForProfileLoad();
       const faction = extractFactionName();
-      const inAlliance = CONFIG.forceShow || (faction && listSet.has(norm(faction)));
 
+      const inAlliance = CONFIG.forceShow || (faction && listSet.has(norm(faction)));
       removeExisting();
       let where = '(skipped)';
       if (inAlliance) where = insertUI();
@@ -327,7 +292,7 @@
         `<b>IronDome</b> — ${reason}`,
         `Wait phase: ${phase}`,
         `Faction: <b>${faction || '(not found)'}</b>`,
-        `List source: <b>${listSrc}</b> (${listCount})`,
+        `List source: <b>local</b> (${listCount})`,
         `In alliance (match | force): <b>${!!(faction && listSet.has(norm(faction)))} | ${CONFIG.forceShow}</b>`,
         `Inserted: ${inAlliance} @ ${where}`
       ]);
@@ -337,16 +302,27 @@
   }
 
   async function init() {
-    const meta = await loadFactionSet();
-    listSet = meta.set;
-    listSrc = meta.src;
-    listCount = meta.count;
+    // Load local list
+    const { list } = readLocalList();
+    listSet = new Set(list.map(norm));
+    listCount = list.length;
+
+    if (!listCount) {
+      logLines([
+        `<span style="color:#ffd166"><b>No local list found.</b></span>`,
+        `Use <b>Edit List</b> or <b>Paste List</b> to add factions (one per line or JSON array).`
+      ]);
+    } else {
+      logLines([`<b>Loaded local list</b>: ${listCount} factions`]);
+    }
 
     await evaluate('init');
 
+    // Observe SPA DOM updates
     const obs = new MutationObserver(() => scheduleEval('mutation'));
     obs.observe(document.documentElement, { childList: true, subtree: true });
 
+    // Observe URL changes
     let lastHref = location.href;
     setInterval(() => {
       if (location.href !== lastHref) {
@@ -358,3 +334,4 @@
 
   void init();
 })();
+
