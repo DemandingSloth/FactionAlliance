@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Torn PDA: Iron Dome Checker + List Manager (Single Script)
+// @name         Torn PDA: Iron Dome Checker + List Manager (Toolbar Button Near Report)
 // @namespace    WetNightmare
-// @version      2.0.0
-// @description  Banner for Iron Dome members + a built-in faction list editor (edit/paste/import/export/clear). No network fetches needed.
+// @version      2.1.0
+// @description  Banner for Iron Dome members + a built-in faction list editor. Opens via a button inserted next to the Report button (fallback to floating button if needed).
 // @match        https://www.torn.com/*
 // @run-at       document-idle
 // @noframes
@@ -16,16 +16,18 @@
    * ========================= */
   const STORAGE_KEY = 'ironDome.factions.local.v1'; // { ts:number, list:string[] }
   const CONFIG = {
-    // Banner (image loads fine in PDA)
+    // Banner
     bannerUrl: 'https://github.com/WetNightmare/FactionAlliance/blob/f373bfec9fd256ca995895a19c64141c05c685a0/iron-dome-banner-750x140.png?raw=true',
     bannerId: 'iron-dome-banner',
-    badgeId: 'iron-dome-tag',
-    badgeText: 'MEMBER OF THE IRON DOME',
+    badgeId:  'iron-dome-tag',
+    badgeText:'MEMBER OF THE IRON DOME',
 
     // Behavior
-    forceShow: false,   // true = show banner on all profiles (handy for quick visual testing)
+    forceShow: false,   // true = show banner on all profiles (for quick testing)
     maxWaitMs: 12000,   // wait up to 12s for profile DOM anchors to appear
     evalDebounceMs: 250 // debounce for SPA mutations/URL changes
+
+    // UI: we’ll try to inject a toolbar button near “Report”; fallback is a floating button
   };
 
   const norm = (s) => (s || '').trim().toLowerCase();
@@ -46,27 +48,16 @@
   }
 
   /* =========================
-   *  Part A — List Manager UI
-   *  (available site-wide)
+   *  List Manager UI (Modal)
    * ========================= */
-  function mountListButton() {
-    if (document.getElementById('iron-dome-list-btn')) return;
-
-    const btn = document.createElement('button');
-    btn.id = 'iron-dome-list-btn';
-    btn.textContent = '🛡️ Iron Dome List';
-    btn.title = 'Open Iron Dome faction list manager';
-    btn.style.cssText = [
-      'position:fixed','right:10px','bottom:10px','z-index:2147483647',
-      'padding:6px 10px','border-radius:8px',
-      'background:#17202a','color:#d7e0ea','border:1px solid #3a4756','cursor:pointer',
-      'font:12px system-ui,Arial,sans-serif','box-shadow:0 4px 14px rgba(0,0,0,.35)'
-    ].join(';');
-    btn.addEventListener('click', openEditor);
-    document.body.appendChild(btn);
-  }
-
   function openEditor() {
+    const existingWrapper = document.getElementById('iron-dome-editor-wrapper');
+    if (existingWrapper) {
+      // toggle if already open
+      existingWrapper.remove();
+      return;
+    }
+
     const current = readList();
     const area = document.createElement('textarea');
     area.rows = 14;
@@ -93,19 +84,18 @@
     actions.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;margin-top:10px';
 
     // Buttons
-    const btnPaste = mkBtn('Paste', () => pasteIntoArea(area));
+    const btnPaste  = mkBtn('Paste', () => pasteIntoArea(area));
     const btnImport = mkBtn('Import JSON', () => importFromFile(area));
-    const btnCopy = mkBtn('Copy JSON', () => copyJson(currentFromArea(area)));
+    const btnCopy   = mkBtn('Copy JSON', () => copyJson(currentFromArea(area)));
     const btnExport = mkBtn('Export JSON', () => exportJson(currentFromArea(area)));
-    const btnClear = mkBtn('Clear', () => { area.value=''; area.focus(); });
-    const spacer = document.createElement('div'); spacer.style.flex='1 1 auto';
-    const btnCancel = mkBtn('Cancel', () => document.body.removeChild(wrapper));
-    const btnSave = mkBtnAccent('Save', () => {
+    const btnClear  = mkBtn('Clear', () => { area.value=''; area.focus(); });
+    const spacer    = document.createElement('div'); spacer.style.flex='1 1 auto';
+    const btnCancel = mkBtn('Close', () => document.body.removeChild(wrapper));
+    const btnSave   = mkBtnAccent('Save', () => {
       const lines = area.value.split('\n').map(s => s.trim()).filter(Boolean);
       writeList(lines);
       document.body.removeChild(wrapper);
       toast(`Saved ${lines.length} factions`);
-      // trigger re-eval on profile if present
       try { scheduleEvaluate && scheduleEvaluate('list-save'); } catch {}
     });
 
@@ -130,11 +120,9 @@
     b.style.fontWeight = '700';
     return b;
   }
-
   function currentFromArea(area) {
     return area.value.split('\n').map(s => s.trim()).filter(Boolean);
   }
-
   function pasteIntoArea(area) {
     const doPrompt = () => {
       const s = prompt('Paste JSON array (["Faction A","Faction B",...]) OR plain text (one per line):');
@@ -149,7 +137,6 @@
       doPrompt();
     }
   }
-
   function applyPastedText(s, area) {
     try {
       let items;
@@ -168,13 +155,12 @@
       alert(`Paste error: ${e.message || e}`);
     }
   }
-
   function exportJson(list) {
     try {
       const json = JSON.stringify(list, null, 2);
       const blob = new Blob([json], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
       a.href = url;
       a.download = `iron-dome-factions-${new Date().toISOString().slice(0,10)}.json`;
       document.body.appendChild(a);
@@ -186,7 +172,6 @@
       alert(`Export error: ${e.message || e}`);
     }
   }
-
   function copyJson(list) {
     const json = JSON.stringify(list, null, 2);
     if (navigator.clipboard?.writeText) {
@@ -197,7 +182,6 @@
       prompt('Copy your JSON:', json);
     }
   }
-
   function importFromFile(area) {
     const input = document.createElement('input');
     input.type = 'file';
@@ -219,7 +203,6 @@
     };
     input.click();
   }
-
   function toast(msg) {
     const t = document.createElement('div');
     t.textContent = msg;
@@ -235,9 +218,119 @@
     setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 180); }, 1500);
   }
 
+  /* =========================================
+   *  Toolbar Button Injection (near “Report”)
+   * ========================================= */
+  function findReportButton() {
+    const buttons = Array.from(document.querySelectorAll('a,button'));
+    // Prefer visible buttons with "Report" text (trimmed)
+    let report = buttons.find(b => /report/i.test((b.textContent || '').trim()));
+    if (!report) {
+      // aria-label or title
+      report = buttons.find(b =>
+        /report/i.test(b.getAttribute?.('aria-label') || '') ||
+        /report/i.test(b.getAttribute?.('title') || '')
+      );
+    }
+    if (!report) {
+      // classname hint
+      report = buttons.find(b => /\breport\b/i.test(b.className || ''));
+    }
+    return report || null;
+  }
+
+  function findActionBarContainer(reportBtn) {
+    if (!reportBtn) return null;
+    // Common containers Torn/PDA might use
+    const candidates = [
+      '.buttons-list',
+      '.profile-actions',
+      '.profile-wrap',
+      '.actions',
+      '.profile-container',
+      '.top-section',
+      'nav',
+    ];
+    for (const sel of candidates) {
+      const el = reportBtn.closest(sel);
+      if (el) return el;
+    }
+    // If nothing matched, try the parent element
+    return reportBtn.parentElement || null;
+  }
+
+  function buildToolbarButtonLike(reportBtn) {
+    // Try to emulate report button’s classes for consistent look
+    const isAnchor = reportBtn && reportBtn.tagName.toLowerCase() === 'a';
+    const btn = isAnchor ? document.createElement('a') : document.createElement('button');
+
+    btn.id = 'iron-dome-list-btn-toolbar';
+    btn.textContent = 'Iron Dome List';
+    btn.href = '#';
+    btn.setAttribute('role', 'button');
+
+    // Copy class names that affect sizing/skin (avoid copying event handlers)
+    if (reportBtn && reportBtn.className) {
+      btn.className = reportBtn.className
+        .replace(/\breport\b/gi, 'iron-dome-list'); // avoid accidental “report” styling
+    } else {
+      // Fallback style if no classes
+      btn.style.cssText = 'padding:6px 10px;border-radius:8px;border:1px solid #3a4756;background:#17202a;color:#d7e0ea;cursor:pointer';
+    }
+
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openEditor();
+    });
+
+    return btn;
+  }
+
+  function insertToolbarButtonNearReport() {
+    if (document.getElementById('iron-dome-list-btn-toolbar')) return true;
+
+    const reportBtn = findReportButton();
+    const bar = findActionBarContainer(reportBtn);
+    if (!bar) return false;
+
+    const btn = buildToolbarButtonLike(reportBtn);
+    try {
+      if (reportBtn && reportBtn.parentElement === bar) {
+        // Insert next to Report (before it)
+        reportBtn.insertAdjacentElement('beforebegin', btn);
+      } else {
+        // Append to the same container
+        bar.appendChild(btn);
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   /* =====================================
-   *  Part B — Banner Checker (profiles)
-   *  (uses the shared local list)
+   *  Fallback Floating Button (if needed)
+   * ===================================== */
+  function mountFloatingButtonFallback() {
+    if (document.getElementById('iron-dome-list-btn-float')) return;
+
+    const btn = document.createElement('button');
+    btn.id = 'iron-dome-list-btn-float';
+    btn.textContent = '🛡️ Iron Dome List';
+    btn.title = 'Open Iron Dome faction list manager';
+    btn.style.cssText = [
+      'position:fixed','right:10px','bottom:10px','z-index:2147483647',
+      'padding:6px 10px','border-radius:8px',
+      'background:#17202a','color:#d7e0ea','border:1px solid #3a4756','cursor:pointer',
+      'font:12px system-ui,Arial,sans-serif','box-shadow:0 4px 14px rgba(0,0,0,.35)'
+    ].join(';');
+    btn.addEventListener('click', openEditor);
+    document.body.appendChild(btn);
+  }
+
+  /* =====================================
+   *  Banner Checker (profiles only)
    * ===================================== */
   let evaluateTimer = null;
   let evaluating = false;
@@ -298,7 +391,6 @@
       buttonsList.insertAdjacentElement('afterend', img);
       img.insertAdjacentElement('afterend', tag);
     } else {
-      // Fallback: at least make it visible somewhere predictable
       (document.querySelector('#mainContainer, main, #content, body') || document.body).append(img, tag);
     }
   }
@@ -322,6 +414,11 @@
       if (!/\/profiles\.php/.test(location.pathname)) return;
 
       const ok = await waitForProfile();
+      // Try to mount toolbar button near Report whenever we’re on a profile
+      if (!insertToolbarButtonNearReport()) {
+        // If Report bar not found, fallback once
+        mountFloatingButtonFallback();
+      }
       if (!ok) return;
 
       const list = readList().map(norm);
@@ -340,23 +437,38 @@
    *  Boot
    * ========================= */
   function boot() {
-    // Mount list manager on all pages
-    mountListButton();
+    // Try to inject the toolbar button on any page that has a Report button.
+    // If not found (e.g., on non-profile pages), we still provide a fallback floating button.
+    const injected = insertToolbarButtonNearReport();
+    if (!injected) {
+      // As soon as DOM mutates (SPA), we’ll retry; meanwhile use fallback so editor is accessible
+      mountFloatingButtonFallback();
+    }
 
     // If on a profile, evaluate now + watch SPA changes
     if (/\/profiles\.php/.test(location.pathname)) {
       void runCheck('init');
 
-      const obs = new MutationObserver(() => scheduleEvaluate('mutation'));
+      const obs = new MutationObserver(() => {
+        // Re-try toolbar injection in case Report appears later
+        insertToolbarButtonNearReport();
+        scheduleEvaluate('mutation');
+      });
       obs.observe(document.documentElement, { childList: true, subtree: true });
 
       let lastHref = location.href;
       setInterval(() => {
         if (location.href !== lastHref) {
           lastHref = location.href;
+          // Re-try toolbar injection for new page
+          insertToolbarButtonNearReport();
           scheduleEvaluate('url-change');
         }
       }, 400);
+    } else {
+      // Not on profile: still try to inject near Report if present on other pages; otherwise fallback stays.
+      const obs = new MutationObserver(() => insertToolbarButtonNearReport());
+      obs.observe(document.documentElement, { childList: true, subtree: true });
     }
   }
 
