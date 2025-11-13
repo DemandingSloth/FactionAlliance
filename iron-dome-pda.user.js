@@ -37,7 +37,7 @@
 
   // ---------------- Config ----------------
   const CONFIG = {
-    bannerUrl: 'https://github.com/WetNightmare/FactionAlliance/blob/f373bfec9fd256ca995895a19c64141c05c685a0/iron-dome-banner-750x140.png?raw=true',
+    bannerUrl: 'https://i.postimg.cc/DwzZ2yx7/lv-0-202511100135130ezgif-com-resize.gif?raw=true',
     bannerId:  'iron-dome-banner',
     badgeId:   'iron-dome-tag',
     badgeText: 'MEMBER OF THE IRON DOME',
@@ -76,7 +76,7 @@
     img.src = CONFIG.bannerUrl;
     img.alt = 'Iron Dome Alliance';
     img.style.width = '375px';
-    img.style.height = '70px';
+    img.style.height = '140px';
     img.style.border = '1px solid rgba(255,255,255,0.12)';
     img.style.borderRadius = '8px';
     img.style.display = 'block';
@@ -102,9 +102,8 @@
     const tag = buildBadge();
 
     if (buttonsList) {
-      // Insert exactly after .buttons-list (same as the earlier working versions)
       buttonsList.insertAdjacentElement('afterend', img);
-      img.insertAdjacentElement('afterend', tag);
+      //img.insertAdjacentElement('afterend', tag);
     } else {
       // Final fallback: place somewhere visible so it still shows if buttons-list isn't present
       (document.querySelector('#mainContainer, main, #content, body') || document.body).append(img, tag);
