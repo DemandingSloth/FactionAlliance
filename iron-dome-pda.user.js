@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Torn PDA: Iron Dome Checker + List Manager (Toolbar Button Near Report)
+// @name         Torn PDA: Iron Dome Checker + List Manager (Toolbar Only)
 // @namespace    WetNightmare
-// @version      2.1.0
-// @description  Banner for Iron Dome members + a built-in faction list editor. Opens via a button inserted next to the Report button (fallback to floating button if needed).
+// @version      2.1.3
+// @description  Banner for Iron Dome members + built-in list editor. Inserts editor button beside the Report button on profiles only; no floating fallback.
 // @match        https://www.torn.com/*
 // @run-at       document-idle
 // @noframes
@@ -26,8 +26,6 @@
     forceShow: false,   // true = show banner on all profiles (for quick testing)
     maxWaitMs: 12000,   // wait up to 12s for profile DOM anchors to appear
     evalDebounceMs: 250 // debounce for SPA mutations/URL changes
-
-    // UI: we’ll try to inject a toolbar button near “Report”; fallback is a floating button
   };
 
   const norm = (s) => (s || '').trim().toLowerCase();
@@ -52,11 +50,7 @@
    * ========================= */
   function openEditor() {
     const existingWrapper = document.getElementById('iron-dome-editor-wrapper');
-    if (existingWrapper) {
-      // toggle if already open
-      existingWrapper.remove();
-      return;
-    }
+    if (existingWrapper) { existingWrapper.remove(); return; }
 
     const current = readList();
     const area = document.createElement('textarea');
@@ -77,7 +71,7 @@
     title.style.cssText = 'font-weight:800;margin:2px 0 10px 0';
 
     const hint = document.createElement('div');
-    hint.innerHTML = '• <b>Edit</b> below (one per line) or use <b>Paste</b>/<b>Import</b> for JSON.<br>• Use <b>Export</b>/<b>Copy JSON</b> to back up your list.';
+    hint.innerHTML = '• <b>Edit</b> below (one per line). • Use <b>Import JSON</b>/<b>Export JSON</b> or <b>Copy JSON</b> for backup.';
     hint.style.cssText = 'opacity:.85;margin:-4px 0 10px 0';
 
     const actions = document.createElement('div');
@@ -90,7 +84,7 @@
     const btnExport = mkBtn('Export JSON', () => exportJson(currentFromArea(area)));
     const btnClear  = mkBtn('Clear', () => { area.value=''; area.focus(); });
     const spacer    = document.createElement('div'); spacer.style.flex='1 1 auto';
-    const btnCancel = mkBtn('Close', () => document.body.removeChild(wrapper));
+    const btnClose  = mkBtn('Close', () => document.body.removeChild(wrapper));
     const btnSave   = mkBtnAccent('Save', () => {
       const lines = area.value.split('\n').map(s => s.trim()).filter(Boolean);
       writeList(lines);
@@ -99,7 +93,7 @@
       try { scheduleEvaluate && scheduleEvaluate('list-save'); } catch {}
     });
 
-    actions.append(btnPaste, btnImport, btnCopy, btnExport, btnClear, spacer, btnCancel, btnSave);
+    actions.append(btnPaste, btnImport, btnCopy, btnExport, btnClear, spacer, btnClose, btnSave);
 
     modal.append(title, hint, area, actions);
     wrapper.appendChild(modal);
@@ -223,7 +217,7 @@
    * ========================================= */
   function findReportButton() {
     const buttons = Array.from(document.querySelectorAll('a,button'));
-    // Prefer visible buttons with "Report" text (trimmed)
+    // Prefer visible buttons with "Report" text
     let report = buttons.find(b => /report/i.test((b.textContent || '').trim()));
     if (!report) {
       // aria-label or title
@@ -241,7 +235,6 @@
 
   function findActionBarContainer(reportBtn) {
     if (!reportBtn) return null;
-    // Common containers Torn/PDA might use
     const candidates = [
       '.buttons-list',
       '.profile-actions',
@@ -255,26 +248,21 @@
       const el = reportBtn.closest(sel);
       if (el) return el;
     }
-    // If nothing matched, try the parent element
     return reportBtn.parentElement || null;
   }
 
   function buildToolbarButtonLike(reportBtn) {
-    // Try to emulate report button’s classes for consistent look
     const isAnchor = reportBtn && reportBtn.tagName.toLowerCase() === 'a';
     const btn = isAnchor ? document.createElement('a') : document.createElement('button');
 
     btn.id = 'iron-dome-list-btn-toolbar';
     btn.textContent = 'Iron Dome List';
-    btn.href = '#';
+    if (isAnchor) btn.href = '#';
     btn.setAttribute('role', 'button');
 
-    // Copy class names that affect sizing/skin (avoid copying event handlers)
     if (reportBtn && reportBtn.className) {
-      btn.className = reportBtn.className
-        .replace(/\breport\b/gi, 'iron-dome-list'); // avoid accidental “report” styling
+      btn.className = reportBtn.className.replace(/\breport\b/gi, 'iron-dome-list');
     } else {
-      // Fallback style if no classes
       btn.style.cssText = 'padding:6px 10px;border-radius:8px;border:1px solid #3a4756;background:#17202a;color:#d7e0ea;cursor:pointer';
     }
 
@@ -292,41 +280,19 @@
 
     const reportBtn = findReportButton();
     const bar = findActionBarContainer(reportBtn);
-    if (!bar) return false;
+    if (!bar || !reportBtn) return false;
 
     const btn = buildToolbarButtonLike(reportBtn);
     try {
-      if (reportBtn && reportBtn.parentElement === bar) {
-        // Insert next to Report (before it)
+      if (reportBtn.parentElement === bar) {
         reportBtn.insertAdjacentElement('beforebegin', btn);
       } else {
-        // Append to the same container
         bar.appendChild(btn);
       }
       return true;
     } catch {
       return false;
     }
-  }
-
-  /* =====================================
-   *  Fallback Floating Button (if needed)
-   * ===================================== */
-  function mountFloatingButtonFallback() {
-    if (document.getElementById('iron-dome-list-btn-float')) return;
-
-    const btn = document.createElement('button');
-    btn.id = 'iron-dome-list-btn-float';
-    btn.textContent = '🛡️ Iron Dome List';
-    btn.title = 'Open Iron Dome faction list manager';
-    btn.style.cssText = [
-      'position:fixed','right:10px','bottom:10px','z-index:2147483647',
-      'padding:6px 10px','border-radius:8px',
-      'background:#17202a','color:#d7e0ea','border:1px solid #3a4756','cursor:pointer',
-      'font:12px system-ui,Arial,sans-serif','box-shadow:0 4px 14px rgba(0,0,0,.35)'
-    ].join(';');
-    btn.addEventListener('click', openEditor);
-    document.body.appendChild(btn);
   }
 
   /* =====================================
@@ -362,8 +328,8 @@
     img.id = CONFIG.bannerId;
     img.src = CONFIG.bannerUrl;
     img.alt = 'Iron Dome Alliance';
-    img.style.width = '375px';
-    img.style.height = '70px';
+    img.style.width = '750px';
+    img.style.height = '140px';
     img.style.border = '1px solid rgba(255,255,255,0.12)';
     img.style.borderRadius = '8px';
     img.style.display = 'block';
@@ -413,12 +379,10 @@
       // Only act on profiles
       if (!/\/profiles\.php/.test(location.pathname)) return;
 
+      // Always attempt to place the toolbar button; if not found, do nothing.
+      insertToolbarButtonNearReport();
+
       const ok = await waitForProfile();
-      // Try to mount toolbar button near Report whenever we’re on a profile
-      if (!insertToolbarButtonNearReport()) {
-        // If Report bar not found, fallback once
-        mountFloatingButtonFallback();
-      }
       if (!ok) return;
 
       const list = readList().map(norm);
@@ -437,20 +401,13 @@
    *  Boot
    * ========================= */
   function boot() {
-    // Try to inject the toolbar button on any page that has a Report button.
-    // If not found (e.g., on non-profile pages), we still provide a fallback floating button.
-    const injected = insertToolbarButtonNearReport();
-    if (!injected) {
-      // As soon as DOM mutates (SPA), we’ll retry; meanwhile use fallback so editor is accessible
-      mountFloatingButtonFallback();
-    }
+    // Try to inject the toolbar button on load and on SPA changes
+    insertToolbarButtonNearReport();
 
-    // If on a profile, evaluate now + watch SPA changes
     if (/\/profiles\.php/.test(location.pathname)) {
       void runCheck('init');
 
       const obs = new MutationObserver(() => {
-        // Re-try toolbar injection in case Report appears later
         insertToolbarButtonNearReport();
         scheduleEvaluate('mutation');
       });
@@ -460,13 +417,13 @@
       setInterval(() => {
         if (location.href !== lastHref) {
           lastHref = location.href;
-          // Re-try toolbar injection for new page
           insertToolbarButtonNearReport();
           scheduleEvaluate('url-change');
         }
       }, 400);
     } else {
-      // Not on profile: still try to inject near Report if present on other pages; otherwise fallback stays.
+      // Non-profile pages: we still try to place the toolbar button if a Report button exists,
+      // but we do NOT create any floating fallback if it can't be found.
       const obs = new MutationObserver(() => insertToolbarButtonNearReport());
       obs.observe(document.documentElement, { childList: true, subtree: true });
     }
