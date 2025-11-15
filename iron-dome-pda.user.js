@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn PDA: Iron Dome Checker (Hardcoded, Robust DOM Logic)
 // @namespace    WetNightmare - GargoyleGoliath [3684397]
-// @version      3.1.0
+// @version      3.1.1
 // @description  Inserts banner under .buttons-list when the profile's faction is in a hardcoded list. SPA-safe, debounced, original selectors.
 // @match        https://www.torn.com/profiles.php*
 // @run-at       document-idle
@@ -27,7 +27,7 @@
     "Angels of Domination",
     "Forbidden Realm",
     "MYTHIC MAYHEM",
-    "Valor's Edge",
+    "Valors Edge",
     "Strikeforce",
     "2nd Chance",
     "Academy of Strippers",
