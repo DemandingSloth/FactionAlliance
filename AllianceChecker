@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Torn: Iron Dome Checker (Desktop, Hardcoded, 375x140)
+// @name         Torn: Iron Dome Checker (Desktop, Hardcoded)
 // @namespace    WetNightmare - GargoyleGoliath [3684397]
-// @version      1.0.0
+// @version      1.0.1
 // @description  Desktop userscript: adds a 375x140 Iron Dome banner below profile action buttons when the profile's faction is in a hardcoded list.
 // @match        https://www.torn.com/profiles.php*
 // @match        https://www.torn.com/*/profiles.php*
@@ -29,7 +29,7 @@
     "Angels of Domination",
     "Forbidden Realm",
     "MYTHIC MAYHEM",
-    "Valor's Edge",
+    "Valors Edge",
     "Strikeforce",
     "2nd Chance",
     "Academy of Strippers",
