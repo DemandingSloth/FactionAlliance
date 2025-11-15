@@ -32,7 +32,7 @@
     "2nd Chance",
     "Academy of Strippers",
     "Echoes of Eden",
-    "The Hallowed Order"
+    "The Hollowed Order"
   ];
 
   // ---------------- Config ----------------
