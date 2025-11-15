@@ -34,7 +34,7 @@
     "2nd Chance",
     "Academy of Strippers",
     "Echoes of Eden",
-    "The Hallowed Order"
+    "The Hollowed Order"
   ];
   const FACTION_SET = new Set(IRON_DOME_FACTIONS.map(s => s.trim().toLowerCase()));
 
