@@ -22,8 +22,6 @@
     "Desert Phoenix",
     "Desert Falcon",
     "Halos Pulse",
-    "The Swarm",
-    "Strict Union",
     "Rockstars",
     "Angels of Deception",
     "Angels of Domination",
@@ -34,7 +32,8 @@
     "2nd Chance",
     "Academy of Strippers",
     "Echoes of Eden",
-    "The Hollowed Order"
+    "The Hollowed Order",
+    "United Earth Empire"
   ];
   const FACTION_SET = new Set(IRON_DOME_FACTIONS.map(s => s.trim().toLowerCase()));
 
