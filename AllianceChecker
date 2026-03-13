@@ -15,25 +15,28 @@
 
   // ---------------- Hardcoded Iron Dome factions ----------------
   const IRON_DOME_FACTIONS = [
-    "Combat Ready HQ",
-    "CR-ACK",
-    "CRashpad",
-    "Cosa-Nostra",
-    "Desert Phoenix",
-    "Halos Pulse",
-    "The Swarm",
-    "Strict Union",
-    "Rockstars",
-    "Angels of Deception",
-    "Angels of Domination",
-    "Forbidden Realm",
-    "MYTHIC MAYHEM",
-    "Valors Edge",
-    "Strikeforce",
     "2nd Chance",
     "Academy of Strippers",
-    "Echoes of Eden",
-    "The Hollowed Order"
+    "Archangels",
+    "Angels of Deception",
+    "Angels of domination",
+    "Brutal Truth",
+    "Chaos Cartel",
+    "Combat Ready HQ",
+    "Combat Ready Mythic",
+    "Combat Ready Massacre",
+    "CR-ack",
+    "CRashpad",
+    "Desert Phoenix",
+    "Forbidden Realm",
+    "Halos pulse",
+    "Hollowed order",
+    "Kaos Korner ",
+    "+ New Eden +",
+    "Rockstars",
+    "ROSE"
+    "United Earth Empire"
+    "Valors Edge"
   ];
   const FACTION_SET = new Set(IRON_DOME_FACTIONS.map(s => s.trim().toLowerCase()));
 
