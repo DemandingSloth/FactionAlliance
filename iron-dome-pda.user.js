@@ -13,26 +13,22 @@
 
   // ---------------- Hardcoded Iron Dome factions ----------------
   const IRON_DOME_FACTIONS = [
-    "Combat Ready HQ",
-    "CR-ACK",
-    "CRashpad",
-    "Cosa-Nostra",
-    "Desert Phoenix",
-    "Desert Falcon",
-    "Halos Pulse",
-    "The Swarm",
-    "Strict Union",
-    "Rockstars",
-    "Angels of Deception",
-    "Angels of Domination",
-    "Forbidden Realm",
-    "MYTHIC MAYHEM",
-    "Valors Edge",
-    "Strikeforce",
-    "2nd Chance",
-    "Academy of Strippers",
-    "Echoes of Eden",
-    "The Hollowed Order"
+   "2nd Chance",
+"Archangels",
+"Angels of Deception",
+"Angels of Domination",
+"Chaos Cartel",
+"Desert Phoenix",
+"Forbidden Realm",
+"Kaos Korner",
+"Nightfall Cartel", 
+"Nightfall Cartel big bois",
+"ROSE", 
+"R.O.S.E II",
+"Stocks & Bongs",
+"Mildly Threatening Indiv.",
+"Unde Factum Est",
+"Valors Edge" 
   ];
 
   // ---------------- Config ----------------
