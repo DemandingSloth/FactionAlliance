@@ -16,21 +16,21 @@
   // ---------------- Hardcoded Iron Dome factions ----------------
   const IRON_DOME_FACTIONS = [
     "2nd Chance",
-    "Academy of Strippers",
-    "Archangels",
-    "Angels of Deception",
-    "Angels of domination",
-    "Brutal Truth",
-    "Chaos Cartel",
-    "Nightfall cartel"
-    "Unde Factum Est"
-    "Desert Phoenix",
-    "Forbidden Realm",
-    "Halos pulse",
-    "Kaos Korner ",
-    "ROSE"
-    "United Earth Empire"
-    "Valors Edge"
+"Archangels",
+"Angels of Deception",
+"Angels of Domination",
+"Chaos Cartel",
+"Desert Phoenix",
+"Forbidden Realm",
+"Kaos Korner",
+"Nightfall Cartel", 
+"Nightfall Cartel big bois",
+"ROSE", 
+"R.O.S.E II",
+"Stocks & Bongs",
+"Mildly Threatening Indiv.",
+"Unde Factum Est",
+"Valors Edge" 
   ];
   const FACTION_SET = new Set(IRON_DOME_FACTIONS.map(s => s.trim().toLowerCase()));
 
